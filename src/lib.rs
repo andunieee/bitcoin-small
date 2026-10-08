@@ -1,4 +1,5 @@
 mod app;
+pub mod form;
 pub mod prices;
 pub mod protocol;
 pub mod store;

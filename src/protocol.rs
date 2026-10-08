@@ -26,47 +26,75 @@ pub const BITCOIN_METHODS: &[&str] = &[
     "liquid",
 ];
 
-pub const PAYMENT_METHODS: &[&str] = &[
-    "Revolut",
-    "Wise",
-    "Zelle",
-    "Strike",
-    "Cash App",
-    "Venmo",
-    "PayPal Friends & Family",
-    "SEPA",
-    "Instant SEPA",
-    "Faster Payments",
-    "Interac e-Transfer",
-    "Bizum",
-    "MB WAY",
-    "N26",
-    "Lydia",
-    "Satispay",
-    "Swish",
-    "Vipps",
-    "MobilePay",
-    "PIX",
-    "Nubank",
-    "Mercado Pago",
-    "Pago Movil",
-    "Nequi",
-    "Daviplata",
-    "Yape",
-    "Plin",
-    "SINPE Movil",
-    "M-Pesa",
-    "UPI",
-    "Paytm",
-    "Advcash",
-    "Uphold",
-    "Payoneer",
-    "Amazon GiftCard",
-    "Google Play Gift Code",
-    "Steam Wallet Gift Card",
-    "Bank transfer",
-    "Cash F2F",
+/// bitcoin methods the new offer form starts with when there is no history
+pub const DEFAULT_BITCOIN_METHODS: &[&str] = &["onchain", "lightning", "arkade"];
+
+/// fiat payment methods and the currencies they are common for, `*` meaning all of them.
+/// the new offer form shows the ones for the chosen currency first and hides the rest.
+pub const PAYMENT_METHODS: &[(&str, &[&str])] = &[
+    ("Bank transfer", &["*"]),
+    ("Cash F2F", &["*"]),
+    ("Revolut", &["USD", "EUR", "GBP", "CHF", "AUD", "CAD", "JPY"]),
+    (
+        "Wise",
+        &[
+            "USD", "EUR", "GBP", "CHF", "AUD", "CAD", "JPY", "BRL", "MXN", "INR",
+        ],
+    ),
+    ("Zelle", &["USD"]),
+    ("Strike", &["USD", "EUR", "GBP"]),
+    ("Cash App", &["USD"]),
+    ("Venmo", &["USD"]),
+    (
+        "PayPal Friends & Family",
+        &["USD", "EUR", "GBP", "CAD", "AUD", "CHF", "JPY"],
+    ),
+    ("SEPA", &["EUR"]),
+    ("Instant SEPA", &["EUR"]),
+    ("Faster Payments", &["GBP"]),
+    ("Interac e-Transfer", &["CAD"]),
+    ("Bizum", &["EUR"]),
+    ("MB WAY", &["EUR"]),
+    ("N26", &["EUR"]),
+    ("Lydia", &["EUR"]),
+    ("Satispay", &["EUR"]),
+    ("MobilePay", &["EUR"]),
+    ("Swish", &["SEK"]),
+    ("Vipps", &["NOK"]),
+    ("TWINT", &["CHF"]),
+    ("PIX", &["BRL"]),
+    ("Nubank", &["BRL", "MXN", "COP"]),
+    ("Mercado Pago", &["ARS", "BRL", "MXN", "CLP"]),
+    ("Pago Movil", &["VES"]),
+    ("Nequi", &["COP"]),
+    ("Daviplata", &["COP"]),
+    ("Yape", &["PEN"]),
+    ("Plin", &["PEN"]),
+    ("SINPE Movil", &["CRC"]),
+    ("M-Pesa", &["KES"]),
+    ("UPI", &["INR"]),
+    ("Paytm", &["INR"]),
+    ("Advcash", &[]),
+    ("Uphold", &[]),
+    ("Payoneer", &[]),
+    ("Amazon GiftCard", &[]),
+    ("Google Play Gift Code", &[]),
+    ("Steam Wallet Gift Card", &[]),
 ];
+
+/// (common for this currency, all the others)
+pub fn payment_methods_for(currency: &str) -> (Vec<&'static str>, Vec<&'static str>) {
+    let mut common = vec![];
+    let mut rest = vec![];
+    for (name, curs) in PAYMENT_METHODS {
+        if curs.contains(&"*") || curs.contains(&currency) {
+            common.push(*name);
+        } else {
+            rest.push(*name);
+        }
+    }
+    (common, rest)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {

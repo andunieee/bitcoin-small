@@ -10,6 +10,7 @@ use ritualistic::{
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
+use crate::form::{self, OfferTemplate};
 use crate::prices::{self, PriceApi};
 use crate::protocol::*;
 use crate::store::{ConversationState, ENOUGH_OWN_REPORTS, Message, Store, TRUSTED_PEERS_TO_ASK};
@@ -17,6 +18,7 @@ use crate::{AppWindow, ConvItem, MsgItem, OfferItem, PayItem, PersonItem, RelayI
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(12);
 const RECONNECT_DELAY: Duration = Duration::from_secs(10);
+const PRICE_REFRESH: Duration = Duration::from_secs(60);
 
 /// a live subscription, one task per relay so each one reconnects on its own. dropping it stops it.
 struct LiveSub(Vec<tokio::task::AbortHandle>);
@@ -40,6 +42,11 @@ struct App {
     offers: Mutex<Vec<Offer>>,
     /// (currency, price api) -> btc price
     prices: Mutex<HashMap<(String, String), f64>>,
+    /// (currency, price api) -> why the last fetch failed
+    price_errors: Mutex<HashMap<(String, String), String>>,
+    /// (currency, price api) picked in the new offer form, kept fresh along with the offers' prices
+    form_pair: Mutex<(String, String)>,
+    locale_currency: String,
     /// (side, currency)
     filters: Mutex<(String, String)>,
 
@@ -73,6 +80,9 @@ pub fn run(data_dir: PathBuf) -> Result<(), slint::PlatformError> {
         store: Mutex::new(Store::open(&data_dir)),
         offers: Mutex::new(vec![]),
         prices: Mutex::new(HashMap::new()),
+        price_errors: Mutex::new(HashMap::new()),
+        form_pair: Mutex::new(Default::default()),
+        locale_currency: form::locale_currency(),
         filters: Mutex::new(("all".into(), "all".into())),
         ping_sub: Mutex::new(None),
         dm_subs: Mutex::new(HashMap::new()),
@@ -99,6 +109,14 @@ pub fn run(data_dir: PathBuf) -> Result<(), slint::PlatformError> {
     }
     app.refresh_offers();
 
+    let a = app.clone();
+    rt.spawn(async move {
+        loop {
+            a.fetch_prices().await;
+            tokio::time::sleep(PRICE_REFRESH).await;
+        }
+    });
+
     ui.run()
 }
 
@@ -107,13 +125,12 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     let mut currencies: Vec<SharedString> = vec!["all".into()];
     currencies.extend(prices::currency_codes().into_iter().map(SharedString::from));
+    ui.set_create_currencies(ModelRc::new(VecModel::from(currencies[1..].to_vec())));
     ui.set_currencies(ModelRc::new(VecModel::from(currencies)));
     // the combobox drops a value that isn't in its model yet, so set it again now that it is
     ui.set_filter_currency("all".into());
 
-    ui.set_payment_options(checklist(PAYMENT_METHODS));
-    ui.set_bitcoin_options(checklist(BITCOIN_METHODS));
-    set_apis_for(ui, "USD");
+    app.reset_create_form(ui);
     app.render_relays();
     app.render_conversations();
     app.render_people();
@@ -151,29 +168,37 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     let a = app.clone();
     ui.on_contact_maker(move |id| a.contact_maker(&id));
 
-    let weak = ui.as_weak();
+    let a = app.clone();
     ui.on_create_currency_changed(move |cur| {
-        if let Some(ui) = weak.upgrade() {
-            set_apis_for(&ui, &cur);
-        }
-    });
-
-    let weak = ui.as_weak();
-    ui.on_toggle_payment(move |idx, checked| {
-        if let Some(ui) = weak.upgrade() {
-            set_checked(&ui.get_payment_options(), idx, checked);
-        }
-    });
-
-    let weak = ui.as_weak();
-    ui.on_toggle_bitcoin(move |idx, checked| {
-        if let Some(ui) = weak.upgrade() {
-            set_checked(&ui.get_bitcoin_options(), idx, checked);
+        if let Some(ui) = a.ui.upgrade() {
+            a.create_currency_changed(&ui, &cur);
         }
     });
 
     let a = app.clone();
-    ui.on_preview_price(move || a.preview_price());
+    ui.on_create_api_changed(move |api| {
+        if let Some(ui) = a.ui.upgrade() {
+            a.form_pair_changed(ui.get_create_currency().into(), api.into());
+        }
+    });
+
+    let a = app.clone();
+    ui.on_create_premium_changed(move || a.render_create_preview());
+
+    let weak = ui.as_weak();
+    ui.on_toggle_payment(move |name, checked| {
+        if let Some(ui) = weak.upgrade() {
+            set_checked(&ui.get_payment_options(), &name, checked);
+            set_checked(&ui.get_payment_more(), &name, checked);
+        }
+    });
+
+    let weak = ui.as_weak();
+    ui.on_toggle_bitcoin(move |name, checked| {
+        if let Some(ui) = weak.upgrade() {
+            set_checked(&ui.get_bitcoin_options(), &name, checked);
+        }
+    });
 
     let a = app.clone();
     ui.on_publish_offer(move || a.publish_offer());
@@ -274,22 +299,21 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     });
 }
 
-fn checklist(names: &[&str]) -> ModelRc<PayItem> {
+fn checklist(names: &[&str], checked: &[String]) -> ModelRc<PayItem> {
     ModelRc::new(VecModel::from(
         names
             .iter()
             .map(|name| PayItem {
                 name: (*name).into(),
-                checked: false,
+                checked: checked.iter().any(|c| c == name),
             })
             .collect::<Vec<_>>(),
     ))
 }
 
-fn set_checked(model: &ModelRc<PayItem>, idx: i32, checked: bool) {
-    if let Some(mut item) = model.row_data(idx as usize) {
-        item.checked = checked;
-        model.set_row_data(idx as usize, item);
+fn set_checked(model: &ModelRc<PayItem>, name: &str, checked: bool) {
+    if let Some(idx) = model.iter().position(|p| p.name == name) {
+        model.set_row_data(idx, PayItem { name: name.into(), checked });
     }
 }
 
@@ -299,17 +323,6 @@ fn checked_names(model: &ModelRc<PayItem>) -> Vec<String> {
         .filter(|p| p.checked)
         .map(|p| p.name.to_string())
         .collect()
-}
-
-fn set_apis_for(ui: &AppWindow, currency: &str) {
-    let apis: Vec<SharedString> = prices::apis_for(currency)
-        .iter()
-        .map(|a| a.id().into())
-        .collect();
-    if let Some(first) = apis.first() {
-        ui.set_create_api(first.clone());
-    }
-    ui.set_create_apis(ModelRc::new(VecModel::from(apis)));
 }
 
 impl App {
@@ -486,14 +499,20 @@ impl App {
         });
     }
 
+    /// the prices of every offer we show and of what is picked in the new offer form
     async fn fetch_prices(self: &Arc<Self>) {
-        let pairs: HashSet<(String, String)> = self
+        let mut pairs: HashSet<(String, String)> = self
             .offers
             .lock()
             .unwrap()
             .iter()
             .map(|o| (o.currency.clone(), o.price_api.clone()))
             .collect();
+        pairs.insert(self.form_pair.lock().unwrap().clone());
+        self.fetch_pairs(pairs).await;
+    }
+
+    async fn fetch_pairs(self: &Arc<Self>, pairs: HashSet<(String, String)>) {
         let handles: Vec<_> = pairs
             .into_iter()
             .filter_map(|(cur, api_id)| {
@@ -507,13 +526,18 @@ impl App {
         for h in handles {
             match h.await {
                 Ok((key, Ok(price))) => {
+                    self.price_errors.lock().unwrap().remove(&key);
                     self.prices.lock().unwrap().insert(key, price);
                 }
-                Ok(((cur, api), Err(err))) => log::warn!("price {cur}/{api}: {err}"),
+                Ok((key, Err(err))) => {
+                    log::warn!("price {}/{}: {err}", key.0, key.1);
+                    self.price_errors.lock().unwrap().insert(key, err);
+                }
                 Err(_) => {}
             }
         }
         self.render_offers();
+        self.render_create_preview();
     }
 
     fn offer_item(&self, o: &Offer) -> OfferItem {
@@ -577,28 +601,84 @@ impl App {
         });
     }
 
-    fn preview_price(self: &Arc<Self>) {
-        let Some(ui) = self.ui.upgrade() else { return };
-        let cur = ui.get_create_currency().to_string();
-        let Some(premium) = prices::parse_premium(&ui.get_create_premium()) else {
-            ui.set_create_preview("invalid premium, use something like +1% or -0.5%".into());
-            return;
-        };
-        let Some(api) = PriceApi::from_id(&ui.get_create_api()) else {
-            return;
-        };
-        ui.set_create_preview("fetching market price…".into());
-        let weak = self.ui.clone();
-        self.rt.spawn(async move {
-            let text = match api.fetch(&cur).await {
-                Ok(m) => format!(
-                    "market: {} {cur}/BTC → your price: {} {cur}/BTC",
-                    thousands(m),
-                    thousands(prices::apply_premium(m, premium))
-                ),
-                Err(err) => format!("failed to fetch price: {err}"),
+    // ------------------------------------------------------------------------------ new offer
+
+    /// fill the form with what we usually do: the locale's currency at first, then whatever our
+    /// last offers had in common
+    fn reset_create_form(self: &Arc<Self>, ui: &AppWindow) {
+        let recent = self.store.lock().unwrap().state.recent_offers.clone();
+        let d = form::defaults(&recent, &self.locale_currency);
+        ui.set_create_side(d.side.into());
+        ui.set_create_currency(d.currency.clone().into());
+        ui.set_create_premium(prices::format_premium(d.premium).into());
+        ui.set_bitcoin_options(checklist(BITCOIN_METHODS, &d.bitcoin_methods));
+        ui.set_create_description("".into());
+        self.create_currency_changed(ui, &d.currency);
+    }
+
+    /// price apis and payment methods depend on the currency
+    fn create_currency_changed(self: &Arc<Self>, ui: &AppWindow, currency: &str) {
+        let recent = self.store.lock().unwrap().state.recent_offers.clone();
+
+        let api = form::default_api(&recent, currency);
+        let apis: Vec<SharedString> = prices::apis_for(currency)
+            .iter()
+            .map(|a| a.id().into())
+            .collect();
+        ui.set_create_apis(ModelRc::new(VecModel::from(apis)));
+        ui.set_create_api(api.into());
+
+        let checked = form::default_payment_methods(&recent, currency);
+        let (mut common, mut more) = payment_methods_for(currency);
+        // something we picked before for this currency is common enough for us
+        let (picked, rest): (Vec<_>, Vec<_>) =
+            more.into_iter().partition(|m| checked.iter().any(|c| c == m));
+        common.extend(picked);
+        more = rest;
+        let others: Vec<&str> = checked
+            .iter()
+            .map(|c| c.as_str())
+            .filter(|c| !PAYMENT_METHODS.iter().any(|(m, _)| m == c))
+            .collect();
+        ui.set_payment_options(checklist(&common, &checked));
+        ui.set_payment_more(checklist(&more, &checked));
+        ui.set_create_other_payments(others.join(", ").into());
+
+        self.form_pair_changed(currency.into(), api.into());
+    }
+
+    fn form_pair_changed(self: &Arc<Self>, currency: String, api: String) {
+        let pair = (currency, api);
+        *self.form_pair.lock().unwrap() = pair.clone();
+        if !self.prices.lock().unwrap().contains_key(&pair) {
+            let app = self.clone();
+            self.rt
+                .spawn(async move { app.fetch_pairs(HashSet::from([pair])).await });
+        }
+        self.render_create_preview();
+    }
+
+    fn render_create_preview(self: &Arc<Self>) {
+        let app = self.clone();
+        let _ = self.ui.upgrade_in_event_loop(move |ui| {
+            let cur = ui.get_create_currency().to_string();
+            let api = ui.get_create_api().to_string();
+            let key = (cur.clone(), api.clone());
+            let text = match prices::parse_premium(&ui.get_create_premium()) {
+                None => "invalid premium, use something like +1% or -0.5%".to_string(),
+                Some(premium) => match app.prices.lock().unwrap().get(&key) {
+                    Some(m) => format!(
+                        "market {} {cur}/BTC ({api}) → your price {} {cur}/BTC",
+                        thousands(*m),
+                        thousands(prices::apply_premium(*m, premium))
+                    ),
+                    None => match app.price_errors.lock().unwrap().get(&key) {
+                        Some(err) => format!("failed to fetch the {api} price: {err}"),
+                        None => "fetching the market price…".into(),
+                    },
+                },
             };
-            let _ = weak.upgrade_in_event_loop(move |ui| ui.set_create_preview(text.into()));
+            ui.set_create_preview(text.into());
         });
     }
 
@@ -630,6 +710,14 @@ impl App {
             return;
         }
 
+        let template = OfferTemplate {
+            side: ui.get_create_side().into(),
+            currency: ui.get_create_currency().into(),
+            price_api: ui.get_create_api().into(),
+            premium,
+            payment_methods: payment_methods.clone(),
+            bitcoin_methods: bitcoin_methods.clone(),
+        };
         let evt = NewOffer {
             side: if ui.get_create_side() == "buy" {
                 Side::Buy
@@ -653,6 +741,9 @@ impl App {
         // start listening for pings on the negotiation relays right away
         {
             let mut store = self.store.lock().unwrap();
+            let recent = &mut store.state.recent_offers;
+            recent.insert(0, template);
+            recent.truncate(form::RECENT_OFFERS);
             let ping_relays = &mut store.state.ping_relays;
             for r in relays.into_iter().rev() {
                 ping_relays.retain(|x| x != &r);
@@ -663,7 +754,7 @@ impl App {
         }
         self.restart_ping_sub();
 
-        ui.set_create_description("".into());
+        self.reset_create_form(&ui);
         ui.set_page(0);
         self.status("publishing offer…");
 

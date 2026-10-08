@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use ritualistic::database::EventDatabase;
 use ritualistic::{Event, Filter, PubKey, RedbEventDatabase, SecretKey, TagQuery};
 
+use crate::form::OfferTemplate;
 use crate::protocol::{KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS};
 
 pub const DEFAULT_RELAYS: &[&str] = &[
@@ -75,6 +76,9 @@ pub struct State {
     /// peer pubkey hex -> a name for them that only we see, never published
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    /// what we filled in for our last offers, most recent first, to fill the next one
+    #[serde(default)]
+    pub recent_offers: Vec<OfferTemplate>,
 }
 
 pub struct Store {

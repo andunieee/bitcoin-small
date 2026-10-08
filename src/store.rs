@@ -72,6 +72,9 @@ pub struct State {
     pub conversations: BTreeMap<String, ConversationState>,
     #[serde(default)]
     pub blocked: HashSet<String>,
+    /// peer pubkey hex -> a name for them that only we see, never published
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
 }
 
 pub struct Store {

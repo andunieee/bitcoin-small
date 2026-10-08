@@ -4,6 +4,7 @@ export struct OfferItem {
     id: string,
     maker: string,
     maker-short: string,
+    maker-label: string,
     mine: bool,
     side: string,
     currency: string,
@@ -20,6 +21,7 @@ export struct OfferItem {
 export struct ConvItem {
     peer: string,
     peer-short: string,
+    label: string,
     summary: string,
     last: string,
     blocked: bool,
@@ -36,6 +38,12 @@ export struct ReportItem {
     success: bool,
     comment: string,
     time: string,
+}
+
+export struct PersonItem {
+    npub: string,
+    short: string,
+    label: string,
 }
 
 export struct RelayItem {
@@ -119,13 +127,32 @@ component SideBadge inherits Rectangle {
     }
 }
 
+// our private name for someone, styled so it stands out from npubs
+component Label inherits Rectangle {
+    in property <string> text;
+    background: #f7931a;
+    border-radius: 4px;
+    height: 20px;
+    width: min(t.preferred-width + 12px, 180px);
+    t := Text {
+        text: root.text;
+        width: parent.width - 12px;
+        overflow: elide;
+        horizontal-alignment: center;
+        color: white;
+        font-size: 12px;
+        font-weight: 700;
+        vertical-alignment: center;
+    }
+}
+
 export component AppWindow inherits Window {
     title: "bitcoin small";
     preferred-width: 420px;
     preferred-height: 820px;
     background: Palette.background;
 
-    // 0 market, 1 offer, 2 create, 3 chats, 4 chat, 5 profile, 6 settings
+    // 0 market, 1 offer, 2 create, 3 chats, 4 chat, 5 profile, 6 settings, 7 people
     in-out property <int> page: 0;
     in-out property <int> back-page: 0;
     in property <string> status;
@@ -166,6 +193,7 @@ export component AppWindow inherits Window {
     in property <[ConvItem]> conversations;
     in property <string> chat-peer;
     in property <string> chat-peer-short;
+    in property <string> chat-peer-label;
     in property <string> chat-summary;
     in property <[MsgItem]> messages;
     callback open-chat(string);
@@ -174,6 +202,7 @@ export component AppWindow inherits Window {
     // profile
     in property <string> profile-npub;
     in property <string> profile-short;
+    in property <string> profile-label;
     in property <bool> profile-blocked;
     in property <bool> profile-is-me;
     in property <[ReportItem]> own-reports;
@@ -182,6 +211,12 @@ export component AppWindow inherits Window {
     callback open-profile(string);
     callback report-trade(bool, string);
     callback set-blocked(bool);
+    callback set-label(string);
+
+    // people
+    in property <[PersonItem]> people;
+    in-out property <string> people-filter;
+    callback people-filter-changed(string);
 
     // settings
     in property <[RelayItem]> relays;
@@ -315,8 +350,15 @@ export component AppWindow inherits Window {
                                     max-height: 40px;
                                     font-size: 13px;
                                 }
-                                Muted {
-                                    text: (offer.mine ? "you" : offer.maker-short) + " · " + offer.age;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    if offer.maker-label != "": Label {
+                                        text: offer.maker-label;
+                                    }
+                                    Muted {
+                                        text: (offer.mine ? "you" : offer.maker-short) + " · " + offer.age;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
                         }
@@ -386,6 +428,18 @@ export component AppWindow inherits Window {
                                 text: root.current-offer.description;
                                 wrap: word-wrap;
                             }
+                        }
+                    }
+                    if root.current-offer.maker-label != "": HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        Text {
+                            text: "maker:";
+                            vertical-alignment: center;
+                        }
+
+                        Label {
+                            text: root.current-offer.maker-label;
                         }
                     }
                     Muted {
@@ -583,7 +637,7 @@ export component AppWindow inherits Window {
                 }
 
                 Muted {
-                    text: "messages are ephemeral on relays: both sides need the app open. they are kept only on this device.";
+                    text: "messages are kept on relays for 30 days, and on this device.";
                 }
 
                 if root.conversations.length == 0: Muted {
@@ -604,9 +658,17 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 padding: 10px;
                                 spacing: 2px;
-                                Text {
-                                    text: conv.peer-short + (conv.blocked ? " (blocked)" : "");
-                                    font-weight: 700;
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    if conv.label != "": Label {
+                                        text: conv.label;
+                                    }
+                                    Text {
+                                        text: conv.peer-short + (conv.blocked ? " (blocked)" : "");
+                                        font-weight: conv.label != "" ? 400 : 700;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
                                 }
 
                                 Muted {
@@ -632,9 +694,17 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     VerticalLayout {
                         horizontal-stretch: 1;
-                        Text {
-                            text: root.chat-peer-short;
-                            font-weight: 700;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            if root.chat-peer-label != "": Label {
+                                text: root.chat-peer-label;
+                            }
+                            Text {
+                                text: root.chat-peer-short;
+                                font-weight: root.chat-peer-label != "" ? 400 : 700;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
                         }
 
                         Muted {
@@ -702,12 +772,31 @@ export component AppWindow inherits Window {
                     spacing: 10px;
                     alignment: start;
                     Title {
-                        text: root.profile-is-me ? "You" : root.profile-short;
+                        text: root.profile-is-me ? "You" : root.profile-label != "" ? root.profile-label : root.profile-short;
                     }
 
                     LineEdit {
                         text: root.profile-npub;
                         read-only: true;
+                    }
+
+                    if !root.profile-is-me: HorizontalLayout {
+                        spacing: 8px;
+                        label-input := LineEdit {
+                            text: root.profile-label;
+                            placeholder-text: "label, only you see it";
+                            accepted => {
+                                root.set-label(self.text);
+                            }
+                        }
+
+                        Button {
+                            text: "Save";
+                            enabled: label-input.text != root.profile-label;
+                            clicked => {
+                                root.set-label(label-input.text);
+                            }
+                        }
                     }
 
                     if !root.profile-is-me: HorizontalLayout {
@@ -823,6 +912,57 @@ export component AppWindow inherits Window {
 
                         Muted {
                             text: "reports are public, kept on this device and published to your current relays.";
+                        }
+                    }
+                }
+            }
+
+            // ---------------------------------------------------------------- people
+            if root.page == 7: VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                Title {
+                    text: "People";
+                }
+
+                Muted {
+                    text: "everyone you labeled. labels are kept only on this device, never published. label someone from their profile.";
+                }
+
+                LineEdit {
+                    text <=> root.people-filter;
+                    placeholder-text: "search labels or npubs";
+                    edited(t) => {
+                        root.people-filter-changed(t);
+                    }
+                }
+
+                if root.people.length == 0: Muted {
+                    text: root.people-filter == "" ? "nobody labeled yet." : "nobody matches.";
+                }
+                ListView {
+                    vertical-stretch: 1;
+                    for person in root.people: VerticalLayout {
+                        padding-bottom: 8px;
+                        Card {
+                            TouchArea {
+                                clicked => {
+                                    root.open-profile(person.npub);
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding: 10px;
+                                spacing: 8px;
+                                Label {
+                                    text: person.label;
+                                }
+
+                                Muted {
+                                    text: person.short;
+                                    vertical-alignment: center;
+                                }
+                            }
                         }
                     }
                 }
@@ -946,6 +1086,14 @@ export component AppWindow inherits Window {
                 active: root.page == 3 || root.page == 4;
                 clicked => {
                     root.page = 3;
+                }
+            }
+
+            NavButton {
+                text: "People";
+                active: root.page == 7;
+                clicked => {
+                    root.page = 7;
                 }
             }
 

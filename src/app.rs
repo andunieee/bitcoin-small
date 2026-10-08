@@ -1,6 +1,6 @@
 //! glue between the ui, the relays and the local store
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,7 +13,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use crate::prices::{self, PriceApi};
 use crate::protocol::*;
 use crate::store::{ConversationState, ENOUGH_OWN_REPORTS, Message, Store, TRUSTED_PEERS_TO_ASK};
-use crate::{AppWindow, ConvItem, MsgItem, OfferItem, PayItem, RelayItem, ReportItem};
+use crate::{AppWindow, ConvItem, MsgItem, OfferItem, PayItem, PersonItem, RelayItem, ReportItem};
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(12);
 const RECONNECT_DELAY: Duration = Duration::from_secs(10);
@@ -116,6 +116,7 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     set_apis_for(ui, "USD");
     app.render_relays();
     app.render_conversations();
+    app.render_people();
 
     let a = app.clone();
     ui.on_refresh_offers(move || a.refresh_offers());
@@ -204,6 +205,17 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
             a.set_blocked(peer, blocked);
         }
     });
+
+    let a = app.clone();
+    ui.on_set_label(move |label| {
+        let current = *a.current_profile.lock().unwrap();
+        if let Some(peer) = current {
+            a.set_label(peer, label.trim());
+        }
+    });
+
+    let a = app.clone();
+    ui.on_people_filter_changed(move |_| a.render_people());
 
     let a = app.clone();
     ui.on_toggle_relay(move |url, enabled| {
@@ -311,6 +323,16 @@ impl App {
 
     fn app_relays(&self) -> Vec<String> {
         self.store.lock().unwrap().state.app_relays.clone()
+    }
+
+    fn label(&self, pk: &PubKey) -> String {
+        let store = self.store.lock().unwrap();
+        store.state.labels.get(&pk.to_hex()).cloned().unwrap_or_default()
+    }
+
+    /// our label for them if we gave them one, otherwise a short npub
+    fn name(&self, pk: &PubKey) -> String {
+        display_name(&self.store.lock().unwrap().state.labels, pk)
     }
 
     fn is_blocked(&self, pk: &PubKey) -> bool {
@@ -514,6 +536,7 @@ impl App {
             id: o.id.to_hex().into(),
             maker: o.maker.to_npub().into(),
             maker_short: short_npub(&o.maker).into(),
+            maker_label: self.label(&o.maker).into(),
             mine: o.maker == self.me,
             side: o.side.as_str().into(),
             currency: o.currency.clone().into(),
@@ -704,7 +727,7 @@ impl App {
         };
         self.ensure_dm_sub(peer, false);
         if is_new {
-            self.status(format!("new chat from {}", short_npub(&peer)));
+            self.status(format!("new chat from {}", self.name(&peer)));
             self.render_conversations();
         }
     }
@@ -763,7 +786,7 @@ impl App {
         if *self.current_chat.lock().unwrap() == Some(conv.peer) {
             self.render_chat();
         } else {
-            self.status(format!("new message from {}", short_npub(&conv.peer)));
+            self.status(format!("new message from {}", self.name(&conv.peer)));
         }
     }
 
@@ -885,9 +908,11 @@ impl App {
                 .collect();
             (c.offer_summary.clone(), msgs)
         };
+        let label = self.label(&peer);
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
             ui.set_chat_peer(peer.to_npub().into());
             ui.set_chat_peer_short(short_npub(&peer).into());
+            ui.set_chat_peer_label(label.into());
             ui.set_chat_summary(summary.into());
             ui.set_messages(ModelRc::new(VecModel::from(msgs)));
         });
@@ -957,6 +982,7 @@ impl App {
                     Some(ConvItem {
                         peer: pk.to_npub().into(),
                         peer_short: short_npub(&pk).into(),
+                        label: s.labels.get(hex).cloned().unwrap_or_default().into(),
                         summary: c.offer_summary.clone().into(),
                         last: c
                             .messages
@@ -998,12 +1024,74 @@ impl App {
             .upgrade_in_event_loop(move |ui| ui.set_profile_blocked(blocked));
     }
 
+    // ------------------------------------------------------------------------------ labels
+
+    /// labels live only in the local state, they are never published
+    fn set_label(self: &Arc<Self>, peer: PubKey, label: &str) {
+        if peer == self.me {
+            return;
+        }
+        {
+            let mut store = self.store.lock().unwrap();
+            if label.is_empty() {
+                store.state.labels.remove(&peer.to_hex());
+            } else {
+                store.state.labels.insert(peer.to_hex(), label.to_string());
+            }
+            store.persist();
+        }
+        self.render_offers();
+        self.render_conversations();
+        self.render_chat();
+        self.render_people();
+        self.render_profile(peer, false);
+        let label = label.to_string();
+        let _ = self.ui.upgrade_in_event_loop(move |ui| {
+            ui.set_profile_label(label.clone().into());
+            // the offer page keeps a copy of the offer, so the back button would show the old label
+            let mut offer = ui.get_current_offer();
+            if offer.maker.as_str() == peer.to_npub() {
+                offer.maker_label = label.into();
+                ui.set_current_offer(offer);
+            }
+        });
+    }
+
+    fn render_people(&self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let query = ui.get_people_filter().trim().to_lowercase();
+        let mut people: Vec<PersonItem> = self
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .labels
+            .iter()
+            .filter_map(|(hex, label)| {
+                let pk: PubKey = hex.parse().ok()?;
+                let npub = pk.to_npub();
+                (query.is_empty()
+                    || label.to_lowercase().contains(&query)
+                    || npub.contains(&query)
+                    || hex.contains(&query))
+                .then(|| PersonItem {
+                    npub: npub.into(),
+                    short: short_npub(&pk).into(),
+                    label: label.clone().into(),
+                })
+            })
+            .collect();
+        people.sort_by_key(|p| p.label.to_lowercase());
+        ui.set_people(ModelRc::new(VecModel::from(people)));
+    }
+
     // ------------------------------------------------------------------------------ reputation
 
     fn open_profile(self: &Arc<Self>, who: PubKey) {
         *self.current_profile.lock().unwrap() = Some(who);
         let blocked = self.is_blocked(&who);
         let is_me = who == self.me;
+        let label = self.label(&who);
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
             if ui.get_page() != 5 {
                 ui.set_back_page(ui.get_page());
@@ -1011,6 +1099,7 @@ impl App {
             ui.set_profile_npub(who.to_npub().into());
             ui.set_profile_short(short_npub(&who).into());
             ui.set_profile_blocked(blocked);
+            ui.set_profile_label(label.into());
             ui.set_profile_is_me(is_me);
             ui.set_own_reports(ModelRc::default());
             ui.set_others_reports(ModelRc::default());
@@ -1024,10 +1113,11 @@ impl App {
     /// trade partners have said about them.
     fn render_profile(self: &Arc<Self>, who: PubKey, ask_relays: bool) {
         let is_me = who == self.me;
-        let (own, trusted, others) = {
+        let (own, trusted, others, labels) = {
             let store = self.store.lock().unwrap();
+            let labels = store.state.labels.clone();
             if is_me {
-                (store.reports_by(&self.me), vec![], vec![])
+                (store.reports_by(&self.me), vec![], vec![], labels)
             } else {
                 let own = store.reports_about(&[self.me], &who);
                 let trusted: Vec<PubKey> = if own.len() < ENOUGH_OWN_REPORTS {
@@ -1045,7 +1135,7 @@ impl App {
                 } else {
                     store.reports_about(&trusted, &who)
                 };
-                (own, trusted, others)
+                (own, trusted, others, labels)
             }
         };
 
@@ -1073,8 +1163,14 @@ impl App {
             )
         };
 
-        let own_items: Vec<ReportItem> = own.iter().map(|e| report_item(e, is_me)).collect();
-        let other_items: Vec<ReportItem> = others.iter().map(|e| report_item(e, false)).collect();
+        let own_items: Vec<ReportItem> = own
+            .iter()
+            .map(|e| report_item(&labels, e, is_me))
+            .collect();
+        let other_items: Vec<ReportItem> = others
+            .iter()
+            .map(|e| report_item(&labels, e, false))
+            .collect();
 
         let app = self.clone();
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
@@ -1133,20 +1229,20 @@ impl App {
 
 // ---------------------------------------------------------------------------------- helpers
 
-fn report_item(e: &Event, show_subject: bool) -> ReportItem {
+fn report_item(labels: &BTreeMap<String, String>, e: &Event, show_subject: bool) -> ReportItem {
     let comment = if show_subject {
         let subject = e
             .tags
             .find("p")
             .and_then(|t| t[1].parse::<PubKey>().ok())
-            .map(|pk| short_npub(&pk))
+            .map(|pk| display_name(labels, &pk))
             .unwrap_or_default();
         format!("with {subject}: {}", e.content)
     } else {
         e.content.clone()
     };
     ReportItem {
-        author_short: short_npub(&e.pubkey).into(),
+        author_short: display_name(labels, &e.pubkey).into(),
         success: e.kind == KIND_TRADE_SUCCESS,
         comment: comment.into(),
         time: ago(e.created_at).into(),
@@ -1158,6 +1254,13 @@ fn split_list(s: &str) -> Vec<String> {
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
         .collect()
+}
+
+fn display_name(labels: &BTreeMap<String, String>, pk: &PubKey) -> String {
+    labels
+        .get(&pk.to_hex())
+        .cloned()
+        .unwrap_or_else(|| short_npub(pk))
 }
 
 fn short_npub(pk: &PubKey) -> String {

@@ -110,6 +110,12 @@ Kind `28022` is in the ephemeral range, so relays forward pings to live subscrib
 other side has replied, the app sends a fresh ping with each message and waits a moment before publishing the message.
 That gives the other side time to subscribe.
 
+### Labels
+
+You can give anyone a label from their profile, such as "fast PIX guy" or "alice from the meetup". Labels are stored
+only on your device and never published. A labeled key shows its label in the order book, in the chats and in trade
+reports, and the People tab lists everyone you labeled, with a search.
+
 ### The trade
 
 The whole trade happens in the DM: amounts, payment details, the invoice or address, who goes first. Nothing about it
@@ -144,15 +150,15 @@ with a newcomer.
 
 ## Code layout
 
-| file              | what                                                                                                   |
-| ---               | ---                                                                                                    |
-| `src/protocol.rs` | event kinds, offer encoding and decoding, the conversation-key DM scheme, pings, reports               |
-| `src/prices.rs`   | hardcoded currencies, price APIs and their fetch functions, premium parsing                            |
-| `src/store.rs`    | key, local state (relays, conversations, own rumor ids, blocklist), redb event database, trust queries |
-| `src/app.rs`      | relay subscriptions, publishing, and the glue to the UI                                                |
-| `ui/app.slint`    | the interface: market, offer, new offer, chats, chat, profile, settings                                |
-| `src/lib.rs`      | Android entry point (`android_main`)                                                                   |
-| `src/main.rs`     | desktop entry point, for development                                                                   |
+| file              | what                                                                                                           |
+| ---               | ---                                                                                                            |
+| `src/protocol.rs` | event kinds, offer encoding and decoding, the conversation-key DM scheme, pings, reports                       |
+| `src/prices.rs`   | hardcoded currencies, price APIs and their fetch functions, premium parsing                                    |
+| `src/store.rs`    | key, local state (relays, conversations, own rumor ids, blocklist, labels), redb event database, trust queries |
+| `src/app.rs`      | relay subscriptions, publishing, and the glue to the UI                                                        |
+| `ui/app.slint`    | the interface: market, offer, new offer, chats, chat, profile, people, settings                                |
+| `src/lib.rs`      | Android entry point (`android_main`)                                                                           |
+| `src/main.rs`     | desktop entry point, for development                                                                           |
 
 ## Building
 

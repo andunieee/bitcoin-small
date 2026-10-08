@@ -300,6 +300,7 @@ export component AppWindow inherits Window {
     callback remove-relay(string);
     callback add-relay(string);
     callback reveal-nsec();
+    callback open-docs();
 
     VerticalLayout {
         // header, extended under the status bar on phones that draw behind it
@@ -350,7 +351,13 @@ export component AppWindow inherits Window {
                     padding: 16px;
                     spacing: 8px;
                     Tip {
-                        text: "There is no escrow here: every trade is based on trust. Start with ridiculously small amounts (like $2), build a history, and increase slowly. Never go too high.";
+                        text: "New here? Read how this works and how to trade safely →";
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.open-docs();
+                            }
+                        }
                     }
 
                     HorizontalLayout {

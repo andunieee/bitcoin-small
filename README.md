@@ -5,6 +5,9 @@ A tiny peer-to-peer market for exchanging bitcoin and fiat over nostr.
 There is **no escrow, no arbiter, no usernames and no server**. Every trade is based on trust alone. Start with
 ridiculously small amounts, like $2. Build a history of trades, increase the amounts slowly, and never go too high.
 
+The user guide lives in `docs/` and is published to <https://andunieee.github.io/bitcoin-small/> on every push to
+`master` (`zola --root docs serve` to preview it). This README is about the protocol and the code.
+
 ## How it works
 
 ### Identity

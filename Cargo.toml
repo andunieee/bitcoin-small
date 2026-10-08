@@ -24,6 +24,7 @@ log = "0.4"
 sha2 = "0.10"
 sys-locale = "0.3"
 minisqlite = { git = "https://github.com/cursor/minisqlite" }
+webbrowser = "1.2.4"
 
 [target.'cfg(target_os = "android")'.dependencies]
 slint = { version = "1.17", features = ["backend-android-activity-06"] }

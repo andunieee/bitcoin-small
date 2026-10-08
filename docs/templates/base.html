@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ config.title }}{% endblock %}</title>
+  <meta name="description" content="{{ config.description }}">
+  <link rel="stylesheet" href="{{ get_url(path='style.css') }}">
+</head>
+<body>
+  <header>
+    <a class="brand" href="{{ config.base_url }}/">bitcoin small</a>
+    <nav>
+      {% set home = get_section(path="_index.md") %}
+      {% for p in home.pages %}
+        <a href="{{ p.permalink }}"{% if page and page.permalink == p.permalink %} class="current"{% endif %}>{{ p.extra.nav | default(value=p.title) }}</a>
+      {% endfor %}
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    <a href="{{ config.extra.repo }}/releases/latest">download</a> ·
+    <a href="{{ config.extra.repo }}">source</a>
+  </footer>
+</body>
+</html>

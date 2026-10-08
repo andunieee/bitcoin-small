@@ -4,7 +4,7 @@ use ritualistic::message_encryption::{decrypt, encrypt, generate_conversation_ke
 use ritualistic::{Event, EventTemplate, ID, Kind, PubKey, SecretKey, Tags, Timestamp};
 
 pub const KIND_OFFER: Kind = Kind(6012);
-pub const KIND_DM: Kind = Kind(28021);
+pub const KIND_DM: Kind = Kind(8021);
 pub const KIND_PING: Kind = Kind(28022);
 pub const KIND_RUMOR: Kind = Kind(14);
 pub const KIND_TRADE_FAILURE: Kind = Kind(8020);
@@ -12,6 +12,9 @@ pub const KIND_TRADE_SUCCESS: Kind = Kind(8022);
 
 /// offers expire after this, and clients only look this far back
 pub const OFFER_TTL_SECS: u32 = 3 * 60 * 60;
+
+/// dms are stored by relays, but expire (nip-40) after this
+pub const DM_TTL_SECS: u32 = 30 * 24 * 60 * 60;
 
 /// how the bitcoin side of the trade can be settled
 pub const BITCOIN_METHODS: &[&str] = &[
@@ -239,10 +242,14 @@ impl Conversation {
         )
         .expect("message size is bounded by the ui");
 
+        let now = Timestamp::now();
         let evt = EventTemplate {
-            created_at: Timestamp::now(),
+            created_at: now,
             kind: KIND_DM,
-            tags: Tags::default(),
+            tags: Tags(vec![vec![
+                "expiration".into(),
+                (now.0 + DM_TTL_SECS).to_string(),
+            ]]),
             content: ciphertext,
         }
         .finalize(&self.signer);
@@ -252,6 +259,10 @@ impl Conversation {
 
     pub fn unwrap(&self, evt: &Event) -> Option<Rumor> {
         if evt.kind != KIND_DM || evt.pubkey != self.pubkey() || !evt.verify_signature() {
+            return None;
+        }
+        let expiration = evt.tags.find("expiration").and_then(|t| t[1].parse::<u32>().ok());
+        if expiration.is_some_and(|exp| exp <= Timestamp::now().0) {
             return None;
         }
         let plain = decrypt(&evt.content, &self.key).ok()?;
@@ -336,6 +347,8 @@ mod tests {
 
         let (rumor, evt) = ca.wrap(&a.pubkey(), "hello", None);
         assert_eq!(evt.pubkey, ca.pubkey());
+        let exp: u32 = evt.tags.find("expiration").unwrap()[1].parse().unwrap();
+        assert_eq!(exp, evt.created_at.0 + DM_TTL_SECS);
         let got = cb.unwrap(&evt).unwrap();
         assert_eq!(got.id, rumor.id);
         assert_eq!(got.content, "hello");

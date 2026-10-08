@@ -65,7 +65,7 @@ lets you switch relays on and off, remove them, and add your own.
 The negotiation relays of an offer are separate. When you create an offer they default to your app relays, but you can
 change them.
 
-### DMs: a shared-key scheme (kinds `28021` and `28022`)
+### DMs: a shared-key scheme (kinds `8021` and `28022`)
 
 This is a new scheme, not NIP-17 or NIP-04.
 
@@ -74,8 +74,9 @@ This is a new scheme, not NIP-17 or NIP-04.
    It is 32 bytes, so it is also a valid secp256k1 secret key. Its public key is the **conversation pubkey**.
 2. A message starts as an unsigned kind `14` **rumor**, as in NIP-17/NIP-59:
    `{id, pubkey: <real author>, created_at, kind: 14, tags: [["p", <recipient>], ["e", <offer id>]], content}`.
-3. The rumor is NIP-44-encrypted with the conversation key. The result goes into the `content` of a kind `28021` event,
-   which is **signed with the conversation key**. So the event's `pubkey` is the conversation pubkey.
+3. The rumor is NIP-44-encrypted with the conversation key. The result goes into the `content` of a kind `8021` event,
+   which is **signed with the conversation key**. So the event's `pubkey` is the conversation pubkey. Its only tag is a
+   NIP-40 `["expiration", <created_at + 30 days>]`.
 4. That event is published to the relays from the offer announcement.
 
 Consequences:
@@ -85,7 +86,7 @@ Consequences:
   messages are yours is to remember them, so the app keeps a local cache of the ids of the rumors it created. Any other
   message in the conversation is from the other party.
 - **Opt-in listening and instant blocking.** To receive messages from someone you subscribe to
-  `{"kinds": [28021], "authors": [<conversation pubkey>]}`. You only see DMs from people you chose to listen to.
+  `{"kinds": [8021], "authors": [<conversation pubkey>]}`. You only see DMs from people you chose to listen to.
   Blocking someone just means not making that subscription anymore. Their messages never reach you, and the relay
   doesn't know who you blocked.
 - **No public metadata.** Relays and observers only see a pubkey nobody has seen before, posting encrypted blobs. They
@@ -101,12 +102,13 @@ The maker's app listens for `{"kinds": [28022], "#p": [<me>]}` on the app relays
 maker's recent offers. When a ping arrives from someone who isn't blocked, the app derives the conversation pubkey and
 subscribes to it. Pings from blocked npubs are ignored.
 
-Kinds `28021` and `28022` are in the ephemeral range, so relays forward them to live subscribers but don't store them.
-In practice:
+Kind `8021` is a regular event, so relays store DMs and the other side doesn't need to be online when you send one.
+Each DM expires 30 days after it was sent: relays that support NIP-40 drop it then, and clients
+ignore it. Messages the app has already received stay in its local cache.
 
-- Both parties need the app open while they negotiate. The conversation is stored only on the two devices.
-- Until the other side has replied, the app sends a fresh ping with each message and waits a moment before publishing
-  the message. That gives the other side time to subscribe.
+Kind `28022` is in the ephemeral range, so relays forward pings to live subscribers but don't store them. Until the
+other side has replied, the app sends a fresh ping with each message and waits a moment before publishing the message.
+That gives the other side time to subscribe.
 
 ### The trade
 

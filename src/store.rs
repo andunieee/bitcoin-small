@@ -1,4 +1,5 @@
-//! everything this app keeps on the device: the key, settings, conversations and trade reports.
+//! everything this app keeps on the device: the key, the json state (settings, open offers,
+//! ongoing trades), the history of past trades in sqlite and trade reports in an event database.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -7,6 +8,7 @@ use ritualistic::database::EventDatabase;
 use ritualistic::{Event, Filter, PubKey, RedbEventDatabase, SecretKey, TagQuery};
 
 use crate::form::OfferTemplate;
+use crate::history::History;
 use crate::protocol::{KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS};
 
 pub const DEFAULT_RELAYS: &[&str] = &[
@@ -46,14 +48,28 @@ pub struct Message {
     pub text: String,
 }
 
+/// an ongoing trade with someone: one per peer, as the conversation key is per pair of keys
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct ConversationState {
-    /// relays of the offer this conversation started from, where both sides publish and listen
+pub struct Trade {
+    /// relays of the offer this trade started from, where both sides publish and listen
     pub relays: Vec<String>,
     pub offer_summary: String,
     #[serde(default)]
     pub offer_id: Option<String>,
+    /// messages from before this are left out, they belong to an earlier trade with the same peer
+    #[serde(default)]
+    pub started_at: u32,
+    #[serde(default)]
+    pub started_by_me: bool,
     pub messages: Vec<Message>,
+}
+
+/// an offer we published, until it expires or we close it
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MyOffer {
+    pub event: Event,
+    /// relays that accepted it, where the deletion goes when we close it
+    pub relays: Vec<String>,
 }
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -68,9 +84,11 @@ pub struct State {
     /// ids of the rumors we created, the only proof of who said what in a conversation
     #[serde(default)]
     pub my_rumors: HashSet<String>,
-    /// peer pubkey hex -> conversation
+    /// peer pubkey hex -> ongoing trade. past ones go to the history database
+    #[serde(default, alias = "conversations")]
+    pub trades: BTreeMap<String, Trade>,
     #[serde(default)]
-    pub conversations: BTreeMap<String, ConversationState>,
+    pub my_offers: Vec<MyOffer>,
     #[serde(default)]
     pub blocked: HashSet<String>,
     /// peer pubkey hex -> a name for them that only we see, never published
@@ -85,6 +103,7 @@ pub struct Store {
     dir: PathBuf,
     pub state: State,
     pub db: RedbEventDatabase,
+    pub history: History,
 }
 
 impl Store {
@@ -98,10 +117,12 @@ impl Store {
                 ..Default::default()
             });
         let db = RedbEventDatabase::open(dir.join("events.redb")).expect("failed to open database");
+        let history = History::open(dir).expect("failed to open the trade history");
         Self {
             dir: dir.to_path_buf(),
             state,
             db,
+            history,
         }
     }
 

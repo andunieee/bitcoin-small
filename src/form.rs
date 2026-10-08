@@ -38,10 +38,15 @@ pub fn defaults(recent: &[OfferTemplate], locale_currency: &str) -> Defaults {
     };
     let mut bitcoin_methods = majority(recent.iter().map(|t| &t.bitcoin_methods));
     if bitcoin_methods.is_empty() {
-        bitcoin_methods = DEFAULT_BITCOIN_METHODS.iter().map(|m| m.to_string()).collect();
+        bitcoin_methods = DEFAULT_BITCOIN_METHODS
+            .iter()
+            .map(|m| m.to_string())
+            .collect();
     }
     Defaults {
-        side: mode(recent.iter().map(|t| t.side.as_str())).unwrap_or("sell").into(),
+        side: mode(recent.iter().map(|t| t.side.as_str()))
+            .unwrap_or("sell")
+            .into(),
         currency: mode(recent.iter().map(|t| t.currency.as_str()))
             .unwrap_or(locale_currency)
             .into(),
@@ -117,7 +122,9 @@ fn currency_for_locale(locale: &str) -> Option<&'static str> {
         "CR" => "CRC",
         _ => return None,
     };
-    prices::currency_codes().contains(&currency).then_some(currency)
+    prices::currency_codes()
+        .contains(&currency)
+        .then_some(currency)
 }
 
 /// the most common value; ties go to the most recent
@@ -130,7 +137,11 @@ fn mode<'a>(values: impl Iterator<Item = &'a str>) -> Option<&'a str> {
         }
     }
     // max_by_key returns the last max, so look from the oldest end to land on the most recent
-    counts.into_iter().rev().max_by_key(|(_, n)| *n).map(|(v, _)| v)
+    counts
+        .into_iter()
+        .rev()
+        .max_by_key(|(_, n)| *n)
+        .map(|(v, _)| v)
 }
 
 /// the items that show up in at least half of the lists, in the order they first appear
@@ -191,7 +202,10 @@ mod tests {
         assert_eq!(d.currency, "BRL");
         assert_eq!(d.premium, 1.0);
         assert_eq!(d.bitcoin_methods, vec!["lightning"]);
-        assert_eq!(default_payment_methods(&recent, "BRL"), vec!["PIX", "Nubank"]);
+        assert_eq!(
+            default_payment_methods(&recent, "BRL"),
+            vec!["PIX", "Nubank"]
+        );
         assert_eq!(default_payment_methods(&recent, "USD"), vec!["Zelle"]);
         assert_eq!(default_api(&recent, "BRL"), "yadio");
     }

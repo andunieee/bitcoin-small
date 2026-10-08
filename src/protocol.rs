@@ -6,6 +6,7 @@ use ritualistic::{Event, EventTemplate, ID, Kind, PubKey, SecretKey, Tags, Times
 pub const KIND_OFFER: Kind = Kind(6012);
 pub const KIND_DM: Kind = Kind(8021);
 pub const KIND_PING: Kind = Kind(28022);
+pub const KIND_DELETION: Kind = Kind(5);
 pub const KIND_RUMOR: Kind = Kind(14);
 pub const KIND_TRADE_FAILURE: Kind = Kind(8020);
 pub const KIND_TRADE_SUCCESS: Kind = Kind(8022);
@@ -34,7 +35,10 @@ pub const DEFAULT_BITCOIN_METHODS: &[&str] = &["onchain", "lightning", "arkade"]
 pub const PAYMENT_METHODS: &[(&str, &[&str])] = &[
     ("Bank transfer", &["*"]),
     ("Cash F2F", &["*"]),
-    ("Revolut", &["USD", "EUR", "GBP", "CHF", "AUD", "CAD", "JPY"]),
+    (
+        "Revolut",
+        &["USD", "EUR", "GBP", "CHF", "AUD", "CAD", "JPY"],
+    ),
     (
         "Wise",
         &[
@@ -289,7 +293,10 @@ impl Conversation {
         if evt.kind != KIND_DM || evt.pubkey != self.pubkey() || !evt.verify_signature() {
             return None;
         }
-        let expiration = evt.tags.find("expiration").and_then(|t| t[1].parse::<u32>().ok());
+        let expiration = evt
+            .tags
+            .find("expiration")
+            .and_then(|t| t[1].parse::<u32>().ok());
         if expiration.is_some_and(|exp| exp <= Timestamp::now().0) {
             return None;
         }
@@ -342,6 +349,20 @@ pub fn ping(me: &SecretKey, peer: &PubKey) -> Event {
 }
 
 /// a public statement that a trade with `peer` went well (8022) or not (8020)
+/// nip-09: ask relays to drop one of our events
+pub fn deletion(me: &SecretKey, id: &ID, kind: Kind) -> Event {
+    EventTemplate {
+        created_at: Timestamp::now(),
+        kind: KIND_DELETION,
+        tags: Tags(vec![
+            vec!["e".into(), id.to_hex()],
+            vec!["k".into(), kind.0.to_string()],
+        ]),
+        content: String::new(),
+    }
+    .finalize(me)
+}
+
 pub fn trade_report(me: &SecretKey, peer: &PubKey, success: bool, comment: &str) -> Event {
     EventTemplate {
         created_at: Timestamp::now(),

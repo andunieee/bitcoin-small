@@ -55,6 +55,9 @@ conditions. The terms go in tags:
   (`since: now - 3h`) and discard any offer whose expiration has passed or is more than 3 hours after its `created_at`.
   To keep an offer up, publish it again.
 
+The app remembers which relays accepted each of your offers. Closing an offer before it expires sends a NIP-09
+deletion (kind `5`, with `["e", <offer id>]` and `["k", "6012"]`) to those relays.
+
 ### Relays
 
 The app uses a set of "app relays" to fetch and publish offers and trade reports. By default these are paid relays:
@@ -113,7 +116,7 @@ That gives the other side time to subscribe.
 ### Labels
 
 You can give anyone a label from their profile, such as "fast PIX guy" or "alice from the meetup". Labels are stored
-only on your device and never published. A labeled key shows its label in the order book, in the chats and in trade
+only on your device and never published. A labeled key shows its label in the order book, in your trades and in trade
 reports, and the People tab lists everyone you labeled, with a search.
 
 ### The trade
@@ -121,6 +124,27 @@ reports, and the People tab lists everyone you labeled, with a search.
 The whole trade happens in the DM: amounts, payment details, the invoice or address, who goes first. Nothing about it
 is public, nothing is escrowed, and nobody can step in if it goes wrong. That's why the app keeps reminding you to
 start small.
+
+A trade starts when you contact a maker, or when a taker pings you. There is one ongoing trade per peer, since the
+conversation key belongs to the pair of keys. The Trades tab lists your open offers, your ongoing trades and your past
+ones. When a trade is over you can:
+
+- **conclude** it, which publishes a trade report (below),
+- **archive** it, which keeps it in your history without a report,
+- or **delete** it, which forgets it.
+
+Ending a trade stops the app from listening to that conversation. If the same person starts a new trade later, it
+only shows messages from after it started. DMs stay on relays for 30 days, so older ones would otherwise come back.
+
+### Local storage
+
+Everything is in the app's data directory:
+
+- `key`: your secret key.
+- `state.json`: settings, labels, your open offers and the relays that took them, ongoing trades with their messages,
+  and the last few offers you made, used to fill the new offer form. It is loaded into memory on startup.
+- `history.sqlite`: past trades, concluded or archived (via [minisqlite](https://github.com/cursor/minisqlite)).
+- `events.redb`: trade reports, yours and other people's.
 
 ### Trade reports (kinds `8022` and `8020`)
 
@@ -150,15 +174,17 @@ with a newcomer.
 
 ## Code layout
 
-| file              | what                                                                                                           |
-| ---               | ---                                                                                                            |
-| `src/protocol.rs` | event kinds, offer encoding and decoding, the conversation-key DM scheme, pings, reports                       |
-| `src/prices.rs`   | hardcoded currencies, price APIs and their fetch functions, premium parsing                                    |
-| `src/store.rs`    | key, local state (relays, conversations, own rumor ids, blocklist, labels), redb event database, trust queries |
-| `src/app.rs`      | relay subscriptions, publishing, and the glue to the UI                                                        |
-| `ui/app.slint`    | the interface: market, offer, new offer, chats, chat, profile, people, settings                                |
-| `src/lib.rs`      | Android entry point (`android_main`)                                                                           |
-| `src/main.rs`     | desktop entry point, for development                                                                           |
+| file              | what                                                                                                                    |
+| ---               | ---                                                                                                                     |
+| `src/protocol.rs` | event kinds, offer encoding and decoding, the conversation-key DM scheme, pings, reports                                |
+| `src/prices.rs`   | hardcoded currencies, price APIs and their fetch functions, premium parsing                                             |
+| `src/store.rs`    | key, json state (relays, open offers, ongoing trades, rumor ids, blocklist, labels), redb event database, trust queries |
+| `src/form.rs`     | defaults for the new offer form, from the locale and your last offers                                                   |
+| `src/history.rs`  | past trades, in sqlite                                                                                                  |
+| `src/app.rs`      | relay subscriptions, publishing, and the glue to the UI                                                                 |
+| `ui/app.slint`    | the interface: market, offer, new offer, trades, trade, profile, people, settings                                       |
+| `src/lib.rs`      | Android entry point (`android_main`)                                                                                    |
+| `src/main.rs`     | desktop entry point, for development                                                                                    |
 
 ## Building
 

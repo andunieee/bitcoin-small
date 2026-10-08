@@ -18,13 +18,26 @@ export struct OfferItem {
     age: string,
 }
 
-export struct ConvItem {
-    peer: string,
+export struct TradeItem {
+    // the peer's npub for an ongoing trade, the history id for a past one
+    key: string,
     peer-short: string,
     label: string,
     summary: string,
+    status: string,
     last: string,
     blocked: bool,
+}
+
+export struct TradeView {
+    ongoing: bool,
+    peer: string,
+    peer-short: string,
+    label: string,
+    blocked: bool,
+    summary: string,
+    status: string,
+    started: string,
 }
 
 export struct MsgItem {
@@ -146,13 +159,64 @@ component Label inherits Rectangle {
     }
 }
 
+component TradeCard inherits Rectangle {
+    in property <TradeItem> item;
+    callback clicked;
+    background: Palette.alternate-background;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Palette.border;
+    opacity: root.item.blocked ? 0.5 : 1;
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: 6px;
+            if root.item.label != "": Label {
+                text: root.item.label;
+            }
+            Text {
+                text: root.item.peer-short + (root.item.blocked ? " (blocked)" : "");
+                font-weight: root.item.label != "" ? 400 : 700;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+        }
+
+        Text {
+            text: root.item.status;
+            color: #f7931a;
+            font-size: 12px;
+            font-weight: 700;
+            wrap: word-wrap;
+        }
+
+        Muted {
+            text: root.item.summary;
+        }
+
+        if root.item.last != "": Text {
+            text: root.item.last;
+            overflow: elide;
+            font-size: 13px;
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "bitcoin small";
     preferred-width: 420px;
     preferred-height: 820px;
     background: Palette.background;
 
-    // 0 market, 1 offer, 2 create, 3 chats, 4 chat, 5 profile, 6 settings, 7 people
+    // 0 market, 1 offer, 2 create, 3 trades, 4 trade, 5 profile, 6 settings, 7 people
     in-out property <int> page: 0;
     in-out property <int> back-page: 0;
     in property <string> status;
@@ -195,15 +259,21 @@ export component AppWindow inherits Window {
     callback toggle-bitcoin(string, bool);
     callback publish-offer();
 
-    // chats
-    in property <[ConvItem]> conversations;
-    in property <string> chat-peer;
-    in property <string> chat-peer-short;
-    in property <string> chat-peer-label;
-    in property <string> chat-summary;
+    // trades
+    in property <[OfferItem]> my-offers;
+    in property <[TradeItem]> ongoing-trades;
+    in property <[TradeItem]> past-trades;
+    in property <TradeView> trade;
     in property <[MsgItem]> messages;
-    callback open-chat(string);
+    in-out property <bool> trade-concluding;
+    in-out property <bool> trade-confirm-delete;
+    callback open-trade(string);
+    callback open-past-trade(string);
+    callback close-offer(string);
     callback send-message(string);
+    callback conclude-trade(bool, string);
+    callback archive-trade();
+    callback delete-trade();
 
     // profile
     in property <string> profile-npub;
@@ -245,7 +315,8 @@ export component AppWindow inherits Window {
                 if root.page == 1 || root.page == 4 || root.page == 5: Button {
                     text: "‹";
                     clicked => {
-                        root.page = root.back-page;
+                        // the trade view is reached from the trades tab, or from a profile opened from it
+                        root.page = root.page == 4 ? 3 : root.back-page;
                     }
                 }
                 Text {
@@ -473,7 +544,14 @@ export component AppWindow inherits Window {
                             }
                         }
                         if root.current-offer.mine: Muted {
-                            text: "this is your offer. takers will show up in Chats.";
+                            text: "this is your offer. takers will show up in Trades.";
+                        }
+                        if root.current-offer.mine: Button {
+                            text: "Close offer";
+                            clicked => {
+                                root.close-offer(root.current-offer.id);
+                                root.page = 0;
+                            }
                         }
                         Tip {
                             text: "Nothing protects you here except your own judgement. Check the history, trade a tiny amount first.";
@@ -696,95 +774,193 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                // ---------------------------------------------------------------- chats
-                if root.page == 3: VerticalLayout {
-                    padding: 16px;
-                    spacing: 8px;
-                    Title {
-                        text: "Chats";
-                    }
+                // ---------------------------------------------------------------- trades
+                if root.page == 3: sv3 := ScrollView {
+                    VerticalLayout {
+                        width: sv3.visible-width;
+                        padding: 16px;
+                        spacing: 10px;
+                        alignment: start;
+                        Title {
+                            text: "Your open offers";
+                        }
 
-                    Muted {
-                        text: "messages are kept on relays for 30 days, and on this device.";
-                    }
-
-                    if root.conversations.length == 0: Muted {
-                        text: "no conversations yet.";
-                    }
-                    ListView {
-                        vertical-stretch: 1;
-                        for conv in root.conversations: VerticalLayout {
-                            padding-bottom: 8px;
-                            padding-right: 6px;
-                            Card {
-                                opacity: conv.blocked ? 0.5 : 1;
-                                TouchArea {
-                                    clicked => {
-                                        root.open-chat(conv.peer);
-                                    }
+                        if root.my-offers.length == 0: Muted {
+                            text: "none. offers last 3 hours.";
+                        }
+                        for offer in root.my-offers: Card {
+                            HorizontalLayout {
+                                padding: 10px;
+                                spacing: 8px;
+                                SideBadge {
+                                    side: offer.side;
+                                    y: (parent.height - self.height) / 2;
                                 }
 
                                 VerticalLayout {
-                                    padding: 10px;
+                                    horizontal-stretch: 1;
                                     spacing: 2px;
-                                    HorizontalLayout {
-                                        spacing: 6px;
-                                        if conv.label != "": Label {
-                                            text: conv.label;
-                                        }
-                                        Text {
-                                            text: conv.peer-short + (conv.blocked ? " (blocked)" : "");
-                                            font-weight: conv.label != "" ? 400 : 700;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                        }
+                                    Text {
+                                        text: offer.currency + " " + offer.premium + " · " + offer.price;
+                                        font-weight: 700;
+                                        overflow: elide;
                                     }
 
                                     Muted {
-                                        text: conv.summary;
-                                    }
-
-                                    Text {
-                                        text: conv.last;
-                                        overflow: elide;
-                                        font-size: 13px;
+                                        text: offer.payments + " · posted " + offer.age;
                                     }
                                 }
+
+                                Button {
+                                    text: "Close";
+                                    clicked => {
+                                        root.close-offer(offer.id);
+                                    }
+                                }
+                            }
+                        }
+
+                        Title {
+                            text: "Ongoing";
+                        }
+
+                        if root.ongoing-trades.length == 0: Muted {
+                            text: "no ongoing trades. contact a maker in the market, or wait for takers of your offers.";
+                        }
+                        for t in root.ongoing-trades: TradeCard {
+                            item: t;
+                            clicked => {
+                                root.open-trade(t.key);
+                            }
+                        }
+
+                        if root.past-trades.length > 0: Title {
+                            text: "History";
+                        }
+                        for t in root.past-trades: TradeCard {
+                            item: t;
+                            opacity: 0.75;
+                            clicked => {
+                                root.open-past-trade(t.key);
                             }
                         }
                     }
                 }
 
-                // ---------------------------------------------------------------- chat
+                // ---------------------------------------------------------------- trade
                 if root.page == 4: VerticalLayout {
                     padding: 16px;
                     spacing: 8px;
                     HorizontalLayout {
                         spacing: 8px;
-                        VerticalLayout {
+                        if root.trade.label != "": Label {
+                            text: root.trade.label;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        Text {
+                            text: root.trade.peer-short + (root.trade.blocked ? " (blocked)" : "");
+                            font-weight: root.trade.label != "" ? 400 : 700;
+                            vertical-alignment: center;
+                            overflow: elide;
                             horizontal-stretch: 1;
-                            HorizontalLayout {
-                                spacing: 6px;
-                                if root.chat-peer-label != "": Label {
-                                    text: root.chat-peer-label;
-                                }
-                                Text {
-                                    text: root.chat-peer-short;
-                                    font-weight: root.chat-peer-label != "" ? 400 : 700;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                }
-                            }
-
-                            Muted {
-                                text: root.chat-summary;
-                            }
                         }
 
                         Button {
                             text: "Profile";
                             clicked => {
-                                root.open-profile(root.chat-peer);
+                                root.open-profile(root.trade.peer);
+                            }
+                        }
+                    }
+
+                    Card {
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 2px;
+                            Text {
+                                text: root.trade.summary;
+                                wrap: word-wrap;
+                                font-size: 13px;
+                            }
+
+                            Text {
+                                text: root.trade.status;
+                                font-weight: 700;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                            }
+
+                            Muted {
+                                text: root.trade.started;
+                            }
+                        }
+                    }
+
+                    if !root.trade-concluding: HorizontalLayout {
+                        spacing: 8px;
+                        if root.trade.ongoing: Button {
+                            text: "Conclude";
+                            clicked => {
+                                root.trade-concluding = true;
+                            }
+                        }
+                        if root.trade.ongoing: Button {
+                            text: "Archive";
+                            clicked => {
+                                root.archive-trade();
+                            }
+                        }
+                        Button {
+                            text: root.trade-confirm-delete ? "Really delete?" : "Delete";
+                            clicked => {
+                                if root.trade-confirm-delete {
+                                    root.delete-trade();
+                                } else {
+                                    root.trade-confirm-delete = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if root.trade-concluding: Card {
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 8px;
+                            Text {
+                                text: "How did it go?";
+                                font-weight: 700;
+                            }
+
+                            conclusion := LineEdit {
+                                placeholder-text: "optional comment, e.g. \"$5 via PIX, fast\"";
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Button {
+                                    text: "✓ Success";
+                                    clicked => {
+                                        root.conclude-trade(true, conclusion.text);
+                                    }
+                                }
+
+                                Button {
+                                    text: "✗ Failure";
+                                    clicked => {
+                                        root.conclude-trade(false, conclusion.text);
+                                    }
+                                }
+
+                                Button {
+                                    text: "Cancel";
+                                    clicked => {
+                                        root.trade-concluding = false;
+                                    }
+                                }
+                            }
+
+                            Muted {
+                                text: "this publishes a trade report about them to your relays and moves the trade to your history. use Archive to put it away without a report.";
                             }
                         }
                     }
@@ -793,6 +969,7 @@ export component AppWindow inherits Window {
                         vertical-stretch: 1;
                         for msg in root.messages: HorizontalLayout {
                             padding-bottom: 6px;
+                            padding-right: 6px;
                             alignment: msg.mine ? end : start;
                             Rectangle {
                                 max-width: 300px;
@@ -814,7 +991,7 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    HorizontalLayout {
+                    if root.trade.ongoing && !root.trade.blocked: HorizontalLayout {
                         spacing: 8px;
                         input := LineEdit {
                             placeholder-text: "message";
@@ -831,6 +1008,9 @@ export component AppWindow inherits Window {
                                 input.text = "";
                             }
                         }
+                    }
+                    if !root.trade.ongoing: Muted {
+                        text: "this trade is over. messages are kept here as they were.";
                     }
                 }
 
@@ -875,7 +1055,7 @@ export component AppWindow inherits Window {
                                 text: "Message";
                                 enabled: !root.profile-blocked;
                                 clicked => {
-                                    root.open-chat(root.profile-npub);
+                                    root.open-trade(root.profile-npub);
                                 }
                             }
 
@@ -1158,7 +1338,7 @@ export component AppWindow inherits Window {
             }
 
             NavButton {
-                text: "Chats";
+                text: "Trades";
                 active: root.page == 3 || root.page == 4;
                 clicked => {
                     root.page = 3;

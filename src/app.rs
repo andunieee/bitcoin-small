@@ -11,14 +11,21 @@ use ritualistic::{
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::form::{self, OfferTemplate};
+use crate::history::{Outcome, PastTrade};
 use crate::prices::{self, PriceApi};
 use crate::protocol::*;
-use crate::store::{ConversationState, ENOUGH_OWN_REPORTS, Message, Store, TRUSTED_PEERS_TO_ASK};
-use crate::{AppWindow, ConvItem, MsgItem, OfferItem, PayItem, PersonItem, RelayItem, ReportItem};
+use crate::store::{ENOUGH_OWN_REPORTS, Message, MyOffer, Store, TRUSTED_PEERS_TO_ASK, Trade};
+use crate::{
+    AppWindow, MsgItem, OfferItem, PayItem, PersonItem, RelayItem, ReportItem, TradeItem, TradeView,
+};
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(12);
 const RECONNECT_DELAY: Duration = Duration::from_secs(10);
 const PRICE_REFRESH: Duration = Duration::from_secs(60);
+/// how far before a trade started its messages are still taken as part of it, for clock skew
+const TRADE_START_SLACK: u32 = 5 * 60;
+/// how many past trades the trades tab lists
+const PAST_TRADES_SHOWN: usize = 30;
 
 /// a live subscription, one task per relay so each one reconnects on its own. dropping it stops it.
 struct LiveSub(Vec<tokio::task::AbortHandle>);
@@ -29,6 +36,15 @@ impl Drop for LiveSub {
             h.abort();
         }
     }
+}
+
+/// the trade shown in the trade view
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TradeRef {
+    /// keyed by the peer, in the json state
+    Ongoing(PubKey),
+    /// keyed by its row in the history database
+    Past(i64),
 }
 
 struct App {
@@ -54,7 +70,7 @@ struct App {
     /// peer hex -> subscription to the conversation pubkey
     dm_subs: Mutex<HashMap<String, LiveSub>>,
 
-    current_chat: Mutex<Option<PubKey>>,
+    current_trade: Mutex<Option<TradeRef>>,
     current_profile: Mutex<Option<PubKey>>,
 }
 
@@ -86,7 +102,7 @@ pub fn run(data_dir: PathBuf) -> Result<(), slint::PlatformError> {
         filters: Mutex::new(("all".into(), "all".into())),
         ping_sub: Mutex::new(None),
         dm_subs: Mutex::new(HashMap::new()),
-        current_chat: Mutex::new(None),
+        current_trade: Mutex::new(None),
         current_profile: Mutex::new(None),
     });
 
@@ -98,7 +114,7 @@ pub fn run(data_dir: PathBuf) -> Result<(), slint::PlatformError> {
         .lock()
         .unwrap()
         .state
-        .conversations
+        .trades
         .keys()
         .cloned()
         .collect();
@@ -132,7 +148,7 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     app.reset_create_form(ui);
     app.render_relays();
-    app.render_conversations();
+    app.render_trades();
     app.render_people();
 
     let a = app.clone();
@@ -204,11 +220,37 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     ui.on_publish_offer(move || a.publish_offer());
 
     let a = app.clone();
-    ui.on_open_chat(move |peer| {
+    ui.on_open_trade(move |peer| {
         if let Ok(pk) = peer.parse::<PubKey>() {
-            a.open_chat(pk);
+            a.open_trade(pk);
         }
     });
+
+    let a = app.clone();
+    ui.on_open_past_trade(move |id| {
+        if let Ok(id) = id.parse::<i64>() {
+            a.show_trade(TradeRef::Past(id));
+        }
+    });
+
+    let a = app.clone();
+    ui.on_close_offer(move |id| a.close_offer(&id));
+
+    let a = app.clone();
+    ui.on_conclude_trade(move |success, comment| {
+        let outcome = if success {
+            Outcome::Success
+        } else {
+            Outcome::Failure
+        };
+        a.end_trade(outcome, comment.trim());
+    });
+
+    let a = app.clone();
+    ui.on_archive_trade(move || a.end_trade(Outcome::Archived, ""));
+
+    let a = app.clone();
+    ui.on_delete_trade(move || a.delete_trade());
 
     let a = app.clone();
     ui.on_send_message(move |text| a.send_message(text.trim()));
@@ -313,7 +355,13 @@ fn checklist(names: &[&str], checked: &[String]) -> ModelRc<PayItem> {
 
 fn set_checked(model: &ModelRc<PayItem>, name: &str, checked: bool) {
     if let Some(idx) = model.iter().position(|p| p.name == name) {
-        model.set_row_data(idx, PayItem { name: name.into(), checked });
+        model.set_row_data(
+            idx,
+            PayItem {
+                name: name.into(),
+                checked,
+            },
+        );
     }
 }
 
@@ -340,7 +388,12 @@ impl App {
 
     fn label(&self, pk: &PubKey) -> String {
         let store = self.store.lock().unwrap();
-        store.state.labels.get(&pk.to_hex()).cloned().unwrap_or_default()
+        store
+            .state
+            .labels
+            .get(&pk.to_hex())
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// our label for them if we gave them one, otherwise a short npub
@@ -383,13 +436,14 @@ impl App {
         events
     }
 
-    async fn publish(&self, relays: Vec<String>, evt: Event) -> (usize, usize) {
+    /// returns the relays that accepted it, and how many we tried
+    async fn publish(&self, relays: Vec<String>, evt: Event) -> (Vec<String>, usize) {
         let total = relays.len();
         let mut results = self.net.clone().publish_many(&relays, evt).await;
-        let mut ok = 0;
+        let mut ok = vec![];
         while let Some(res) = results.recv().await {
             match res.error {
-                None => ok += 1,
+                None => ok.push(res.relay_url.to_string()),
                 Some(err) => log::warn!("publish to {} failed: {err}", res.relay_url),
             }
         }
@@ -489,6 +543,10 @@ impl App {
                 .filter_map(Offer::from_event)
                 .filter(|o| !app.is_blocked(&o.maker))
                 .collect();
+            // our own offers only show while we still have them open, a relay may have
+            // ignored the deletion of one we closed
+            let mine: HashSet<ID> = app.open_offers().iter().map(|o| o.id).collect();
+            offers.retain(|o| o.maker != app.me || mine.contains(&o.id));
             offers.sort_by_key(|o| std::cmp::Reverse(o.created_at));
             let count = offers.len();
             *app.offers.lock().unwrap() = offers;
@@ -537,6 +595,8 @@ impl App {
             }
         }
         self.render_offers();
+        // also drops our offers that expired since the last time
+        self.render_trades();
         self.render_create_preview();
     }
 
@@ -631,8 +691,9 @@ impl App {
         let checked = form::default_payment_methods(&recent, currency);
         let (mut common, mut more) = payment_methods_for(currency);
         // something we picked before for this currency is common enough for us
-        let (picked, rest): (Vec<_>, Vec<_>) =
-            more.into_iter().partition(|m| checked.iter().any(|c| c == m));
+        let (picked, rest): (Vec<_>, Vec<_>) = more
+            .into_iter()
+            .partition(|m| checked.iter().any(|c| c == m));
         common.extend(picked);
         more = rest;
         let others: Vec<&str> = checked
@@ -741,6 +802,10 @@ impl App {
         // start listening for pings on the negotiation relays right away
         {
             let mut store = self.store.lock().unwrap();
+            store.state.my_offers.push(MyOffer {
+                event: evt.clone(),
+                relays: vec![],
+            });
             let recent = &mut store.state.recent_offers;
             recent.insert(0, template);
             recent.truncate(form::RECENT_OFFERS);
@@ -755,17 +820,78 @@ impl App {
         self.restart_ping_sub();
 
         self.reset_create_form(&ui);
+        self.render_trades();
         ui.set_page(0);
         self.status("publishing offer…");
 
         let app = self.clone();
         self.rt.spawn(async move {
+            let id = evt.id;
             let (ok, total) = app.publish(app.app_relays(), evt).await;
-            app.status(format!("offer published to {ok}/{total} relays"));
+            app.status(format!("offer published to {}/{total} relays", ok.len()));
+            let mut store = app.store.lock().unwrap();
+            if let Some(o) = store.state.my_offers.iter_mut().find(|o| o.event.id == id) {
+                o.relays = ok;
+                store.persist();
+            }
         });
     }
 
-    // ------------------------------------------------------------------------------ dms
+    // ------------------------------------------------------------------------------ trades
+
+    /// our offers that haven't expired yet. expired ones are dropped from the state for good.
+    fn open_offers(&self) -> Vec<Offer> {
+        let mut store = self.store.lock().unwrap();
+        let before = store.state.my_offers.len();
+        store
+            .state
+            .my_offers
+            .retain(|o| Offer::from_event(&o.event).is_some());
+        if store.state.my_offers.len() != before {
+            store.persist();
+        }
+        store
+            .state
+            .my_offers
+            .iter()
+            .filter_map(|o| Offer::from_event(&o.event))
+            .collect()
+    }
+
+    /// nip-09 deletion, sent to the relays that took the offer
+    fn close_offer(self: &Arc<Self>, offer_id: &str) {
+        let Some(mine) = ({
+            let mut store = self.store.lock().unwrap();
+            let pos = store
+                .state
+                .my_offers
+                .iter()
+                .position(|o| o.event.id.to_hex() == offer_id);
+            let mine = pos.map(|p| store.state.my_offers.remove(p));
+            store.persist();
+            mine
+        }) else {
+            return;
+        };
+        self.offers
+            .lock()
+            .unwrap()
+            .retain(|o| o.id.to_hex() != offer_id);
+        self.render_offers();
+        self.render_trades();
+
+        let relays = if mine.relays.is_empty() {
+            self.app_relays()
+        } else {
+            mine.relays
+        };
+        let evt = deletion(&self.sk, &mine.event.id, KIND_OFFER);
+        let app = self.clone();
+        self.rt.spawn(async move {
+            let (ok, total) = app.publish(relays, evt).await;
+            app.status(format!("offer deleted from {}/{total} relays", ok.len()));
+        });
+    }
 
     /// pings are signed by the sender's real key and p-tag us. we listen for them on our app relays
     /// and on the negotiation relays of the offers we made.
@@ -790,6 +916,7 @@ impl App {
         *self.ping_sub.lock().unwrap() = Some(sub);
     }
 
+    /// someone wants to trade with us: that starts a trade, unless there is one going on already
     fn on_ping(self: &Arc<Self>, evt: Event) {
         let peer = evt.pubkey;
         if peer == self.me || !evt.verify_signature() || self.is_blocked(&peer) {
@@ -797,18 +924,20 @@ impl App {
         }
         let is_new = {
             let mut store = self.store.lock().unwrap();
-            let is_new = !store.state.conversations.contains_key(&peer.to_hex());
+            let is_new = !store.state.trades.contains_key(&peer.to_hex());
             if is_new {
                 let relays = if store.state.ping_relays.is_empty() {
                     store.state.app_relays.clone()
                 } else {
                     store.state.ping_relays.clone()
                 };
-                store.state.conversations.insert(
+                store.state.trades.insert(
                     peer.to_hex(),
-                    ConversationState {
+                    Trade {
                         relays,
                         offer_summary: "pinged you about your offer".into(),
+                        started_at: evt.created_at.0,
+                        started_by_me: false,
                         ..Default::default()
                     },
                 );
@@ -818,13 +947,13 @@ impl App {
         };
         self.ensure_dm_sub(peer, false);
         if is_new {
-            self.status(format!("new chat from {}", self.name(&peer)));
-            self.render_conversations();
+            self.status(format!("new trade with {}", self.name(&peer)));
+            self.render_trades();
         }
     }
 
     /// subscribe to `authors:[conversation pubkey]`, which is all it takes to hear from a peer.
-    /// blocking someone is just never doing this for them.
+    /// blocking someone is just never doing this for them. only ongoing trades are listened to.
     fn ensure_dm_sub(self: &Arc<Self>, peer: PubKey, restart: bool) {
         if self.is_blocked(&peer) {
             return;
@@ -834,13 +963,24 @@ impl App {
         if subs.contains_key(&hex) && !restart {
             return;
         }
-        let Some(relays) = self.conversation_relays(&peer) else {
+        let Some((relays, started_at)) = self
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .trades
+            .get(&hex)
+            .map(|t| (t.relays.clone(), t.started_at))
+        else {
             return;
         };
         let conv = Conversation::new(&self.sk, peer);
         let filter = Filter {
             kinds: Some(vec![KIND_DM]),
             authors: Some(vec![conv.pubkey()]),
+            // dms stay on relays for a while, older ones belong to an earlier trade
+            since: (started_at > 0)
+                .then(|| Timestamp(started_at.saturating_sub(TRADE_START_SLACK))),
             ..Default::default()
         };
         let sub = self.live(&relays, filter, move |app, evt| app.on_dm(&conv, evt));
@@ -858,24 +998,26 @@ impl App {
             if store.state.my_rumors.contains(&rumor.id) {
                 return;
             }
-            let Some(c) = store.state.conversations.get_mut(&conv.peer.to_hex()) else {
+            let Some(t) = store.state.trades.get_mut(&conv.peer.to_hex()) else {
                 return;
             };
-            if c.messages.iter().any(|m| m.id == rumor.id) {
+            if t.messages.iter().any(|m| m.id == rumor.id)
+                || rumor.created_at < t.started_at.saturating_sub(TRADE_START_SLACK)
+            {
                 return;
             }
-            c.messages.push(Message {
+            t.messages.push(Message {
                 id: rumor.id,
                 created_at: rumor.created_at,
                 mine: false,
                 text: rumor.content,
             });
-            c.messages.sort_by_key(|m| m.created_at);
+            t.messages.sort_by_key(|m| m.created_at);
             store.persist();
         }
-        self.render_conversations();
-        if *self.current_chat.lock().unwrap() == Some(conv.peer) {
-            self.render_chat();
+        self.render_trades();
+        if *self.current_trade.lock().unwrap() == Some(TradeRef::Ongoing(conv.peer)) {
+            self.render_trade();
         } else {
             self.status(format!("new message from {}", self.name(&conv.peer)));
         }
@@ -901,14 +1043,18 @@ impl App {
         }
         {
             let mut store = self.store.lock().unwrap();
-            let c = store
+            let t = store
                 .state
-                .conversations
+                .trades
                 .entry(offer.maker.to_hex())
-                .or_default();
-            c.relays = offer.relays.clone();
-            c.offer_id = Some(offer.id.to_hex());
-            c.offer_summary = format!(
+                .or_insert_with(|| Trade {
+                    started_at: Timestamp::now().0,
+                    started_by_me: true,
+                    ..Default::default()
+                });
+            t.relays = offer.relays.clone();
+            t.offer_id = Some(offer.id.to_hex());
+            t.offer_summary = format!(
                 "maker {}s bitcoin for {} at market {} · {}",
                 offer.side.as_str(),
                 offer.currency,
@@ -919,12 +1065,12 @@ impl App {
         }
         self.ensure_dm_sub(offer.maker, true);
         self.send_ping(offer.maker);
-        self.render_conversations();
-        self.open_chat(offer.maker);
+        self.render_trades();
+        self.open_trade(offer.maker);
     }
 
     fn send_ping(self: &Arc<Self>, peer: PubKey) {
-        let Some(relays) = self.conversation_relays(&peer) else {
+        let Some(relays) = self.trade_relays(&peer) else {
             return;
         };
         let evt = ping(&self.sk, &peer);
@@ -934,31 +1080,34 @@ impl App {
         });
     }
 
-    fn conversation_relays(&self, peer: &PubKey) -> Option<Vec<String>> {
+    fn trade_relays(&self, peer: &PubKey) -> Option<Vec<String>> {
         self.store
             .lock()
             .unwrap()
             .state
-            .conversations
+            .trades
             .get(&peer.to_hex())
-            .map(|c| c.relays.clone())
+            .map(|t| t.relays.clone())
     }
 
-    fn open_chat(self: &Arc<Self>, peer: PubKey) {
+    /// open the ongoing trade with someone, starting one if there is none
+    fn open_trade(self: &Arc<Self>, peer: PubKey) {
         if peer == self.me {
             return;
         }
         let created = {
             let mut store = self.store.lock().unwrap();
-            let exists = store.state.conversations.contains_key(&peer.to_hex());
+            let exists = store.state.trades.contains_key(&peer.to_hex());
             if !exists {
                 // talking to someone outside of an offer, use our own relays
                 let relays = store.state.app_relays.clone();
-                store.state.conversations.insert(
+                store.state.trades.insert(
                     peer.to_hex(),
-                    ConversationState {
+                    Trade {
                         relays,
                         offer_summary: "direct chat".into(),
+                        started_at: Timestamp::now().0,
+                        started_by_me: true,
                         ..Default::default()
                     },
                 );
@@ -969,42 +1118,103 @@ impl App {
         if created {
             self.ensure_dm_sub(peer, false);
             self.send_ping(peer);
-            self.render_conversations();
+            self.render_trades();
         }
-        *self.current_chat.lock().unwrap() = Some(peer);
-        self.render_chat();
+        self.show_trade(TradeRef::Ongoing(peer));
+    }
+
+    fn show_trade(self: &Arc<Self>, which: TradeRef) {
+        *self.current_trade.lock().unwrap() = Some(which);
+        self.render_trade();
         let _ = self.ui.upgrade_in_event_loop(|ui| {
+            ui.set_trade_confirm_delete(false);
+            ui.set_trade_concluding(false);
             ui.set_back_page(3);
             ui.set_page(4);
         });
     }
 
-    fn render_chat(&self) {
-        let Some(peer) = *self.current_chat.lock().unwrap() else {
+    fn render_trade(&self) {
+        let Some(which) = *self.current_trade.lock().unwrap() else {
             return;
         };
-        let (summary, msgs) = {
-            let store = self.store.lock().unwrap();
-            let Some(c) = store.state.conversations.get(&peer.to_hex()) else {
-                return;
-            };
-            let msgs: Vec<MsgItem> = c
-                .messages
-                .iter()
-                .map(|m| MsgItem {
-                    mine: m.mine,
-                    text: m.text.clone().into(),
-                    time: ago(Timestamp(m.created_at)).into(),
-                })
-                .collect();
-            (c.offer_summary.clone(), msgs)
+        let store = self.store.lock().unwrap();
+        let (peer, view) = match which {
+            TradeRef::Ongoing(peer) => {
+                let Some(t) = store.state.trades.get(&peer.to_hex()) else {
+                    return;
+                };
+                let view = TradeView {
+                    ongoing: true,
+                    summary: t.offer_summary.clone().into(),
+                    status: trade_status(t).into(),
+                    started: format!(
+                        "{} {}",
+                        if t.started_by_me {
+                            "you started it"
+                        } else {
+                            "they started it"
+                        },
+                        if t.started_at > 0 {
+                            ago(Timestamp(t.started_at))
+                        } else {
+                            String::new()
+                        }
+                    )
+                    .into(),
+                    ..Default::default()
+                };
+                (peer, (view, t.messages.clone()))
+            }
+            TradeRef::Past(id) => {
+                let Some(t) = store.history.get(id) else {
+                    return;
+                };
+                let Ok(peer) = t.peer.parse::<PubKey>() else {
+                    return;
+                };
+                let view = TradeView {
+                    ongoing: false,
+                    summary: t.offer_summary.clone().into(),
+                    status: past_status(&t).into(),
+                    started: format!(
+                        "{} {}, ended {}",
+                        if t.started_by_me {
+                            "you started it"
+                        } else {
+                            "they started it"
+                        },
+                        ago(Timestamp(t.started_at)),
+                        ago(Timestamp(t.ended_at))
+                    )
+                    .into(),
+                    ..Default::default()
+                };
+                (peer, (view, t.messages))
+            }
         };
-        let label = self.label(&peer);
+        let (mut view, messages) = view;
+        let s = &store.state;
+        view.peer = peer.to_npub().into();
+        view.peer_short = short_npub(&peer).into();
+        view.label = s
+            .labels
+            .get(&peer.to_hex())
+            .cloned()
+            .unwrap_or_default()
+            .into();
+        view.blocked = s.blocked.contains(&peer.to_hex());
+        drop(store);
+        let msgs: Vec<MsgItem> = messages
+            .iter()
+            .map(|m| MsgItem {
+                mine: m.mine,
+                text: m.text.clone().into(),
+                time: ago(Timestamp(m.created_at)).into(),
+            })
+            .collect();
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
-            ui.set_chat_peer(peer.to_npub().into());
-            ui.set_chat_peer_short(short_npub(&peer).into());
-            ui.set_chat_peer_label(label.into());
-            ui.set_chat_summary(summary.into());
+            ui.set_trade(view);
             ui.set_messages(ModelRc::new(VecModel::from(msgs)));
         });
     }
@@ -1013,7 +1223,7 @@ impl App {
         if text.is_empty() || text.len() > 8000 {
             return;
         }
-        let Some(peer) = *self.current_chat.lock().unwrap() else {
+        let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
             return;
         };
         if self.is_blocked(&peer) {
@@ -1024,15 +1234,15 @@ impl App {
         let (relays, needs_ping, evt) = {
             let mut store = self.store.lock().unwrap();
             let state = &mut store.state;
-            let Some(c) = state.conversations.get_mut(&peer.to_hex()) else {
+            let Some(t) = state.trades.get_mut(&peer.to_hex()) else {
                 return;
             };
-            let offer = c.offer_id.as_deref().and_then(|h| ID::from_hex(h).ok());
+            let offer = t.offer_id.as_deref().and_then(|h| ID::from_hex(h).ok());
             let (rumor, evt) = conv.wrap(&self.me, text, offer);
             // until they answer we keep poking them, as they only start listening after a ping
-            let needs_ping = !c.messages.iter().any(|m| !m.mine);
-            let relays = c.relays.clone();
-            c.messages.push(Message {
+            let needs_ping = !t.messages.iter().any(|m| !m.mine);
+            let relays = t.relays.clone();
+            t.messages.push(Message {
                 id: rumor.id.clone(),
                 created_at: rumor.created_at,
                 mine: true,
@@ -1042,8 +1252,8 @@ impl App {
             store.persist();
             (relays, needs_ping, evt)
         };
-        self.render_chat();
-        self.render_conversations();
+        self.render_trade();
+        self.render_trades();
 
         if needs_ping {
             self.send_ping(peer);
@@ -1055,27 +1265,96 @@ impl App {
                 tokio::time::sleep(Duration::from_millis(1500)).await;
             }
             let (ok, total) = app.publish(relays, evt).await;
-            if ok == 0 {
+            if ok.is_empty() {
                 app.status(format!("message failed to reach any of {total} relays"));
             }
         });
     }
 
-    fn render_conversations(&self) {
-        let items: Vec<ConvItem> = {
-            let s = &self.store.lock().unwrap().state;
-            let mut convs: Vec<_> = s.conversations.iter().collect();
-            convs.sort_by_key(|(_, c)| std::cmp::Reverse(c.messages.last().map(|m| m.created_at)));
-            convs
+    /// end the ongoing trade: with a public report (success or failure), or just archived.
+    /// either way it moves from the json state to the history database and we stop listening.
+    fn end_trade(self: &Arc<Self>, outcome: Outcome, comment: &str) {
+        let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
+            return;
+        };
+        {
+            let mut store = self.store.lock().unwrap();
+            let Some(trade) = store.state.trades.get(&peer.to_hex()).cloned() else {
+                return;
+            };
+            if let Err(err) =
+                store
+                    .history
+                    .add(&peer.to_hex(), &trade, outcome, comment, Timestamp::now().0)
+            {
+                drop(store);
+                self.status(format!("failed to save the trade in the history: {err}"));
+                return;
+            }
+            store.state.trades.remove(&peer.to_hex());
+            store.persist();
+        }
+        self.dm_subs.lock().unwrap().remove(&peer.to_hex());
+        if outcome != Outcome::Archived {
+            self.publish_report(peer, outcome == Outcome::Success, comment);
+        }
+        self.leave_trade();
+    }
+
+    /// forget a trade without keeping it anywhere
+    fn delete_trade(self: &Arc<Self>) {
+        let Some(which) = *self.current_trade.lock().unwrap() else {
+            return;
+        };
+        match which {
+            TradeRef::Ongoing(peer) => {
+                let mut store = self.store.lock().unwrap();
+                store.state.trades.remove(&peer.to_hex());
+                store.persist();
+                drop(store);
+                self.dm_subs.lock().unwrap().remove(&peer.to_hex());
+            }
+            TradeRef::Past(id) => self.store.lock().unwrap().history.delete(id),
+        }
+        self.leave_trade();
+    }
+
+    fn leave_trade(self: &Arc<Self>) {
+        *self.current_trade.lock().unwrap() = None;
+        self.render_trades();
+        let _ = self.ui.upgrade_in_event_loop(|ui| ui.set_page(3));
+    }
+
+    /// the trades tab: our open offers, ongoing trades and the most recent past ones
+    fn render_trades(&self) {
+        let open: Vec<OfferItem> = self
+            .open_offers()
+            .iter()
+            .map(|o| self.offer_item(o))
+            .collect();
+        let (ongoing, past) = {
+            let store = self.store.lock().unwrap();
+            let s = &store.state;
+            let mut trades: Vec<_> = s.trades.iter().collect();
+            trades.sort_by_key(|(_, t)| {
+                std::cmp::Reverse(
+                    t.messages
+                        .last()
+                        .map(|m| m.created_at)
+                        .unwrap_or(t.started_at),
+                )
+            });
+            let ongoing: Vec<TradeItem> = trades
                 .into_iter()
-                .filter_map(|(hex, c)| {
+                .filter_map(|(hex, t)| {
                     let pk: PubKey = hex.parse().ok()?;
-                    Some(ConvItem {
-                        peer: pk.to_npub().into(),
+                    Some(TradeItem {
+                        key: pk.to_npub().into(),
                         peer_short: short_npub(&pk).into(),
                         label: s.labels.get(hex).cloned().unwrap_or_default().into(),
-                        summary: c.offer_summary.clone().into(),
-                        last: c
+                        summary: t.offer_summary.clone().into(),
+                        status: trade_status(t).into(),
+                        last: t
                             .messages
                             .last()
                             .map(|m| format!("{}{}", if m.mine { "you: " } else { "" }, m.text))
@@ -1084,10 +1363,31 @@ impl App {
                         blocked: s.blocked.contains(hex),
                     })
                 })
-                .collect()
+                .collect();
+            let labels = s.labels.clone();
+            let past: Vec<TradeItem> = store
+                .history
+                .list(PAST_TRADES_SHOWN)
+                .iter()
+                .filter_map(|t| {
+                    let pk: PubKey = t.peer.parse().ok()?;
+                    Some(TradeItem {
+                        key: t.id.to_string().into(),
+                        peer_short: short_npub(&pk).into(),
+                        label: labels.get(&t.peer).cloned().unwrap_or_default().into(),
+                        summary: t.offer_summary.clone().into(),
+                        status: past_status(t).into(),
+                        last: ago(Timestamp(t.ended_at)).into(),
+                        blocked: false,
+                    })
+                })
+                .collect();
+            (ongoing, past)
         };
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
-            ui.set_conversations(ModelRc::new(VecModel::from(items)));
+            ui.set_my_offers(ModelRc::new(VecModel::from(open)));
+            ui.set_ongoing_trades(ModelRc::new(VecModel::from(ongoing)));
+            ui.set_past_trades(ModelRc::new(VecModel::from(past)));
         });
     }
 
@@ -1109,7 +1409,8 @@ impl App {
         } else {
             self.ensure_dm_sub(peer, false);
         }
-        self.render_conversations();
+        self.render_trades();
+        self.render_trade();
         let _ = self
             .ui
             .upgrade_in_event_loop(move |ui| ui.set_profile_blocked(blocked));
@@ -1132,8 +1433,8 @@ impl App {
             store.persist();
         }
         self.render_offers();
-        self.render_conversations();
-        self.render_chat();
+        self.render_trades();
+        self.render_trade();
         self.render_people();
         self.render_profile(peer, false);
         let label = label.to_string();
@@ -1254,10 +1555,8 @@ impl App {
             )
         };
 
-        let own_items: Vec<ReportItem> = own
-            .iter()
-            .map(|e| report_item(&labels, e, is_me))
-            .collect();
+        let own_items: Vec<ReportItem> =
+            own.iter().map(|e| report_item(&labels, e, is_me)).collect();
         let other_items: Vec<ReportItem> = others
             .iter()
             .map(|e| report_item(&labels, e, false))
@@ -1303,17 +1602,24 @@ impl App {
         let Some(peer) = *self.current_profile.lock().unwrap() else {
             return;
         };
+        self.publish_report(peer, success, comment);
+        self.render_profile(peer, false);
+    }
+
+    fn publish_report(self: &Arc<Self>, peer: PubKey, success: bool, comment: &str) {
         if peer == self.me {
             return;
         }
         let evt = trade_report(&self.sk, &peer, success, comment);
         self.store.lock().unwrap().save_event(&evt);
-        self.render_profile(peer, false);
 
         let app = self.clone();
         self.rt.spawn(async move {
             let (ok, total) = app.publish(app.app_relays(), evt).await;
-            app.status(format!("trade report published to {ok}/{total} relays"));
+            app.status(format!(
+                "trade report published to {}/{total} relays",
+                ok.len()
+            ));
         });
     }
 }
@@ -1337,6 +1643,30 @@ fn report_item(labels: &BTreeMap<String, String>, e: &Event, show_subject: bool)
         success: e.kind == KIND_TRADE_SUCCESS,
         comment: comment.into(),
         time: ago(e.created_at).into(),
+    }
+}
+
+fn trade_status(t: &Trade) -> String {
+    let from_them = t.messages.iter().any(|m| !m.mine);
+    let from_me = t.messages.iter().any(|m| m.mine);
+    match t.messages.last() {
+        _ if !from_them && (from_me || t.started_by_me) => "waiting for their answer".into(),
+        _ if !from_me => "they are waiting for your answer".into(),
+        Some(m) if !m.mine => "negotiating · your turn".into(),
+        _ => "negotiating · their turn".into(),
+    }
+}
+
+fn past_status(t: &PastTrade) -> String {
+    let outcome = match t.outcome {
+        Outcome::Success => "✓ concluded: success",
+        Outcome::Failure => "✗ concluded: failure",
+        Outcome::Archived => "archived",
+    };
+    if t.comment.is_empty() {
+        outcome.into()
+    } else {
+        format!("{outcome} · \"{}\"", t.comment)
     }
 }
 

@@ -1,10 +1,11 @@
-//! defaults for the new offer form: the currency from the system locale, everything else from
-//! the last offers we made, so nobody has to fill in the same thing over and over.
+//! defaults for the new offer form: every field comes from the last offers we made, so nobody
+//! has to fill in the same thing over and over. only when we never made one do we fall back to
+//! the system locale, the app relays and hardcoded choices.
 
 use std::collections::HashMap;
 
 use crate::prices;
-use crate::protocol::DEFAULT_BITCOIN_METHODS;
+use crate::protocol::{DEFAULT_BITCOIN_METHODS, payment_methods_for};
 
 /// how many of our past offers the form learns from
 pub const RECENT_OFFERS: usize = 5;
@@ -18,6 +19,8 @@ pub struct OfferTemplate {
     pub premium: f64,
     pub payment_methods: Vec<String>,
     pub bitcoin_methods: Vec<String>,
+    #[serde(default)]
+    pub relays: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,22 +29,40 @@ pub struct Defaults {
     pub currency: String,
     pub premium: f64,
     pub bitcoin_methods: Vec<String>,
+    pub relays: Vec<String>,
 }
 
 /// `recent` is most recent first
-pub fn defaults(recent: &[OfferTemplate], locale_currency: &str) -> Defaults {
-    let premium = if recent.is_empty() {
-        0.0
-    } else {
-        let avg = recent.iter().map(|t| t.premium).sum::<f64>() / recent.len() as f64;
-        (avg * 100.0).round() / 100.0
+pub fn defaults(
+    recent: &[OfferTemplate],
+    locale_currency: &str,
+    app_relays: &[String],
+) -> Defaults {
+    let Some(last) = recent.first() else {
+        return Defaults {
+            side: "sell".into(),
+            currency: locale_currency.into(),
+            premium: 0.0,
+            bitcoin_methods: DEFAULT_BITCOIN_METHODS
+                .iter()
+                .map(|m| m.to_string())
+                .collect(),
+            relays: app_relays.to_vec(),
+        };
     };
-    let mut bitcoin_methods = majority(recent.iter().map(|t| &t.bitcoin_methods));
-    if bitcoin_methods.is_empty() {
-        bitcoin_methods = DEFAULT_BITCOIN_METHODS
-            .iter()
-            .map(|m| m.to_string())
-            .collect();
+    let avg = recent.iter().map(|t| t.premium).sum::<f64>() / recent.len() as f64;
+    // when nothing reaches a majority the last offer is the best guess we have
+    let or_last = |common: Vec<String>, last: &Vec<String>| {
+        if common.is_empty() {
+            last.clone()
+        } else {
+            common
+        }
+    };
+    let mut relays = or_last(majority(recent.iter().map(|t| &t.relays)), &last.relays);
+    if relays.is_empty() {
+        // only offers from before we remembered relays
+        relays = app_relays.to_vec();
     }
     Defaults {
         side: mode(recent.iter().map(|t| t.side.as_str()))
@@ -50,18 +71,29 @@ pub fn defaults(recent: &[OfferTemplate], locale_currency: &str) -> Defaults {
         currency: mode(recent.iter().map(|t| t.currency.as_str()))
             .unwrap_or(locale_currency)
             .into(),
-        premium,
-        bitcoin_methods,
+        premium: (avg * 100.0).round() / 100.0,
+        bitcoin_methods: or_last(
+            majority(recent.iter().map(|t| &t.bitcoin_methods)),
+            &last.bitcoin_methods,
+        ),
+        relays,
     }
 }
 
-/// the api we used most for this currency, or the first one that can quote it
+/// the api we used most for this currency, else the one we used most overall that can quote it,
+/// else the first one that can
 pub fn default_api(recent: &[OfferTemplate], currency: &str) -> &'static str {
     let apis = prices::apis_for(currency);
+    let usable = |t: &OfferTemplate| apis.iter().any(|a| a.id() == t.price_api);
+    let same_currency: Vec<_> = recent.iter().filter(|t| t.currency == currency).collect();
+    let pool = if same_currency.iter().any(|t| usable(t)) {
+        same_currency
+    } else {
+        recent.iter().collect()
+    };
     mode(
-        recent
-            .iter()
-            .filter(|t| t.currency == currency)
+        pool.iter()
+            .filter(|t| usable(t))
             .map(|t| t.price_api.as_str()),
     )
     .and_then(|id| apis.iter().find(|a| a.id() == id))
@@ -70,14 +102,36 @@ pub fn default_api(recent: &[OfferTemplate], currency: &str) -> &'static str {
     .unwrap_or("")
 }
 
-/// payment methods we used in most of our recent offers in this currency
+/// payment methods we used in most of our recent offers in this currency. for a currency we never
+/// offered in, the ones we use most elsewhere that are also common for it
 pub fn default_payment_methods(recent: &[OfferTemplate], currency: &str) -> Vec<String> {
-    majority(
-        recent
-            .iter()
-            .filter(|t| t.currency == currency)
-            .map(|t| &t.payment_methods),
-    )
+    let same_currency: Vec<_> = recent.iter().filter(|t| t.currency == currency).collect();
+    if let Some(last) = same_currency.first() {
+        let common = majority(same_currency.iter().map(|t| &t.payment_methods));
+        return if common.is_empty() {
+            last.payment_methods.clone()
+        } else {
+            common
+        };
+    }
+    let (fits, _) = payment_methods_for(currency);
+    let common = majority(recent.iter().map(|t| &t.payment_methods));
+    let last = recent
+        .first()
+        .map(|t| t.payment_methods.as_slice())
+        .unwrap_or_default();
+    let pick = |list: &[String]| -> Vec<String> {
+        list.iter()
+            .filter(|m| fits.contains(&m.as_str()))
+            .cloned()
+            .collect()
+    };
+    let picked = pick(&common);
+    if picked.is_empty() {
+        pick(last)
+    } else {
+        picked
+    }
 }
 
 /// the currency of the country in the system locale, USD when it can't tell
@@ -169,6 +223,16 @@ mod tests {
     use super::*;
 
     fn tpl(currency: &str, premium: f64, payments: &[&str], bitcoin: &[&str]) -> OfferTemplate {
+        tpl_relays(currency, premium, payments, bitcoin, &[])
+    }
+
+    fn tpl_relays(
+        currency: &str,
+        premium: f64,
+        payments: &[&str],
+        bitcoin: &[&str],
+        relays: &[&str],
+    ) -> OfferTemplate {
         OfferTemplate {
             side: "sell".into(),
             currency: currency.into(),
@@ -176,16 +240,18 @@ mod tests {
             premium,
             payment_methods: payments.iter().map(|s| s.to_string()).collect(),
             bitcoin_methods: bitcoin.iter().map(|s| s.to_string()).collect(),
+            relays: relays.iter().map(|s| s.to_string()).collect(),
         }
     }
 
     #[test]
     fn no_history() {
-        let d = defaults(&[], "BRL");
+        let d = defaults(&[], "BRL", &["wss://a/".into()]);
         assert_eq!(d.currency, "BRL");
         assert_eq!(d.side, "sell");
         assert_eq!(d.premium, 0.0);
         assert_eq!(d.bitcoin_methods, vec!["onchain", "lightning", "arkade"]);
+        assert_eq!(d.relays, vec!["wss://a/"]);
         assert_eq!(default_api(&[], "USD"), "coingecko");
         assert_eq!(default_api(&[], "VES"), "yadio");
         assert!(default_payment_methods(&[], "USD").is_empty());
@@ -198,7 +264,7 @@ mod tests {
             tpl("USD", 1.0, &["Zelle"], &["lightning", "onchain"]),
             tpl("BRL", 0.0, &["PIX", "Nubank"], &["lightning", "liquid"]),
         ];
-        let d = defaults(&recent, "EUR");
+        let d = defaults(&recent, "EUR", &[]);
         assert_eq!(d.currency, "BRL");
         assert_eq!(d.premium, 1.0);
         assert_eq!(d.bitcoin_methods, vec!["lightning"]);
@@ -213,7 +279,36 @@ mod tests {
     #[test]
     fn ties_go_to_the_most_recent() {
         let recent = vec![tpl("USD", 0.0, &[], &[]), tpl("EUR", 0.0, &[], &[])];
-        assert_eq!(defaults(&recent, "BRL").currency, "USD");
+        assert_eq!(defaults(&recent, "BRL", &[]).currency, "USD");
+    }
+
+    #[test]
+    fn history_beats_settings() {
+        let recent = vec![
+            tpl_relays("USD", 0.0, &["Zelle", "Strike"], &["liquid"], &["wss://x/"]),
+            tpl_relays(
+                "USD",
+                0.0,
+                &["Zelle"],
+                &["onchain"],
+                &["wss://x/", "wss://y/"],
+            ),
+            tpl_relays("USD", 0.0, &["Zelle"], &["arkade"], &["wss://y/"]),
+        ];
+        let d = defaults(&recent, "BRL", &["wss://app/".into()]);
+        assert_eq!(d.relays, vec!["wss://x/", "wss://y/"]);
+        // no method reaches a majority: repeat the last offer, not the hardcoded defaults
+        assert_eq!(d.bitcoin_methods, vec!["liquid"]);
+        // a currency we never offered in still learns from the others
+        assert_eq!(default_api(&recent, "EUR"), "yadio");
+        assert_eq!(default_payment_methods(&recent, "EUR"), vec!["Strike"]);
+        // old history without relays
+        let d = defaults(
+            &[tpl("USD", 0.0, &[], &["onchain"])],
+            "BRL",
+            &["wss://app/".into()],
+        );
+        assert_eq!(d.relays, vec!["wss://app/"]);
     }
 
     #[test]

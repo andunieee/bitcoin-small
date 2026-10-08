@@ -22,5 +22,4 @@ the only thing protecting you is your own judgement and their reputation.
 - [Trading safely](safety/): reputation, who goes first, and the usual tricks.
 - [Privacy](privacy/): what other people can and can't see.
 
-[Download the app](https://github.com/andunieee/bitcoin-small/releases/latest) for Android, Linux, macOS or
-Windows.
+[Download the app](https://github.com/andunieee/bitcoin-small/releases/latest) for Android, Linux or macOS.

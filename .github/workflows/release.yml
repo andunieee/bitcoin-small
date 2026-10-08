@@ -22,7 +22,7 @@ jobs:
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
           - { os: macos-latest, target: aarch64-apple-darwin }
           - { os: macos-latest, target: x86_64-apple-darwin }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          # no windows: minisqlite relies on std::os::unix
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -37,13 +37,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
       - run: cargo build --release --locked --bin bitcoin-small --target ${{ matrix.target }}
       - name: package
-        shell: bash
         run: |
-          ext=""
-          [ "$RUNNER_OS" = Windows ] && ext=".exe"
           mkdir dist
-          cp "target/${{ matrix.target }}/release/bitcoin-small$ext" \
-             "dist/bitcoin-small-${GITHUB_REF_NAME}-${{ matrix.target }}$ext"
+          cp "target/${{ matrix.target }}/release/bitcoin-small" \
+             "dist/bitcoin-small-${GITHUB_REF_NAME}-${{ matrix.target }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}

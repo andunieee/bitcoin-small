@@ -206,3 +206,10 @@ cargo apk build --lib --release
 
 The APK settings (package name, SDK versions and the `INTERNET` permission) are under `[package.metadata.android]` in
 `Cargo.toml`.
+
+### Releases
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`. It builds binaries for Linux (x86_64, aarch64), macOS
+(aarch64, x86_64) and Windows (x86_64), plus the APK, and attaches them to a GitHub release. The APK is signed with the
+keystore in the `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD` repository secrets. Without them it is signed
+with a throwaway key, so Android won't install the next release over it.

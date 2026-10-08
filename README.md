@@ -1,7 +1,6 @@
 # bitcoin small
 
-A tiny peer-to-peer market for exchanging bitcoin and fiat over nostr. It's an Android app written in Rust with
-[Slint](https://slint.dev) and [ritualistic](https://crates.io/crates/ritualistic).
+A tiny peer-to-peer market for exchanging bitcoin and fiat over nostr.
 
 There is **no escrow, no arbiter, no usernames and no server**. Every trade is based on trust alone. Start with
 ridiculously small amounts, like $2. Build a history of trades, increase the amounts slowly, and never go too high.
@@ -143,15 +142,15 @@ with a newcomer.
 
 ## Code layout
 
-| file | what |
-| --- | --- |
-| `src/protocol.rs` | event kinds, offer encoding and decoding, the conversation-key DM scheme, pings, reports |
-| `src/prices.rs` | hardcoded currencies, price APIs and their fetch functions, premium parsing |
-| `src/store.rs` | key, local state (relays, conversations, own rumor ids, blocklist), redb event database, trust queries |
-| `src/app.rs` | relay subscriptions, publishing, and the glue to the UI |
-| `ui/app.slint` | the interface: market, offer, new offer, chats, chat, profile, settings |
-| `src/lib.rs` | Android entry point (`android_main`) |
-| `src/main.rs` | desktop entry point, for development |
+| file              | what                                                                                                   |
+| ---               | ---                                                                                                    |
+| `src/protocol.rs` | event kinds, offer encoding and decoding, the conversation-key DM scheme, pings, reports               |
+| `src/prices.rs`   | hardcoded currencies, price APIs and their fetch functions, premium parsing                            |
+| `src/store.rs`    | key, local state (relays, conversations, own rumor ids, blocklist), redb event database, trust queries |
+| `src/app.rs`      | relay subscriptions, publishing, and the glue to the UI                                                |
+| `ui/app.slint`    | the interface: market, offer, new offer, chats, chat, profile, settings                                |
+| `src/lib.rs`      | Android entry point (`android_main`)                                                                   |
+| `src/main.rs`     | desktop entry point, for development                                                                   |
 
 ## Building
 
@@ -173,10 +172,3 @@ cargo apk build --lib --release
 
 The APK settings (package name, SDK versions and the `INTERNET` permission) are under `[package.metadata.android]` in
 `Cargo.toml`.
-
-## Known limitations
-
-- ritualistic doesn't expose its AUTH signer yet, so relays that require NIP-42 AUTH for reading or writing won't work
-  until it does.
-- DMs are ephemeral on relays. If the other side is offline, the message is lost (but it stays in your local history).
-- Losing the device means losing your key and your history, unless you backed up the nsec.

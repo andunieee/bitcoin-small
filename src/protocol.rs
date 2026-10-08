@@ -179,7 +179,7 @@ impl NewOffer {
             tags: Tags(tags),
             content: self.description.clone(),
         }
-        .finalize(sk)
+        .finalize_protected(sk)
     }
 }
 
@@ -284,7 +284,7 @@ impl Conversation {
             ]]),
             content: ciphertext,
         }
-        .finalize(&self.signer);
+        .finalize_protected(&self.signer);
 
         (rumor, evt)
     }
@@ -345,7 +345,7 @@ pub fn ping(me: &SecretKey, peer: &PubKey) -> Event {
         tags: Tags(vec![vec!["p".into(), peer.to_hex()]]),
         content: String::new(),
     }
-    .finalize(me)
+    .finalize_protected(me)
 }
 
 /// a public statement that a trade with `peer` went well (8022) or not (8020)
@@ -360,7 +360,7 @@ pub fn deletion(me: &SecretKey, id: &ID, kind: Kind) -> Event {
         ]),
         content: String::new(),
     }
-    .finalize(me)
+    .finalize_protected(me)
 }
 
 pub fn trade_report(me: &SecretKey, peer: &PubKey, success: bool, comment: &str) -> Event {
@@ -374,7 +374,21 @@ pub fn trade_report(me: &SecretKey, peer: &PubKey, success: bool, comment: &str)
         tags: Tags(vec![vec!["p".into(), peer.to_hex()]]),
         content: comment.to_string(),
     }
-    .finalize(me)
+    .finalize_protected(me)
+}
+
+/// every event we publish carries the nip-70 "-" tag, so relays only accept it from its author
+trait FinalizeProtected {
+    fn finalize_protected(self, sk: &SecretKey) -> Event;
+}
+
+impl FinalizeProtected for EventTemplate {
+    fn finalize_protected(mut self, sk: &SecretKey) -> Event {
+        if !self.tags.0.iter().any(|t| t.len() == 1 && t[0] == "-") {
+            self.tags.0.push(vec!["-".into()]);
+        }
+        self.finalize(sk)
+    }
 }
 
 fn sha256(data: &[u8]) -> [u8; 32] {
@@ -396,6 +410,7 @@ mod tests {
 
         let (rumor, evt) = ca.wrap(&a.pubkey(), "hello", None);
         assert_eq!(evt.pubkey, ca.pubkey());
+        assert!(evt.tags.0.iter().any(|t| t == &vec!["-".to_string()]));
         let exp: u32 = evt.tags.find("expiration").unwrap()[1].parse().unwrap();
         assert_eq!(exp, evt.created_at.0 + DM_TTL_SECS);
         let got = cb.unwrap(&evt).unwrap();
@@ -422,6 +437,7 @@ mod tests {
         }
         .to_event(&sk);
         assert!(evt.verify_signature());
+        assert!(evt.tags.0.iter().any(|t| t == &vec!["-".to_string()]));
         let o = Offer::from_event(&evt).unwrap();
         assert_eq!(o.currency, "USD");
         assert_eq!(o.premium, 1.5);

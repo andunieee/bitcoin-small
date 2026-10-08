@@ -301,6 +301,7 @@ export component AppWindow inherits Window {
     callback add-relay(string);
     callback reveal-nsec();
     callback open-docs();
+    callback import-nsec(string);
 
     VerticalLayout {
         // header, extended under the status bar on phones that draw behind it
@@ -1266,6 +1267,31 @@ export component AppWindow inherits Window {
                         if root.nsec != "": LineEdit {
                             text: root.nsec;
                             read-only: true;
+                        }
+
+                        Title {
+                            text: "Import a key";
+                        }
+
+                        Muted {
+                            text: "use an nsec you had before. this brings back that identity and its reputation, but not its trades or messages, which stay on the device they happened on. your current key is kept in the app's data folder.";
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            import-field := LineEdit {
+                                placeholder-text: "nsec1…";
+                                input-type: password;
+                            }
+
+                            Button {
+                                text: "Import";
+                                enabled: import-field.text != "";
+                                clicked => {
+                                    root.import-nsec(import-field.text);
+                                    import-field.text = "";
+                                }
+                            }
                         }
                         Title {
                             text: "Relays";

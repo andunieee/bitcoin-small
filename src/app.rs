@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use ritualistic::{
@@ -51,8 +51,8 @@ enum TradeRef {
 }
 
 struct App {
-    sk: SecretKey,
-    me: PubKey,
+    /// our key and its pubkey. it only changes when an nsec is imported
+    identity: RwLock<(SecretKey, PubKey)>,
     net: Network,
     rt: tokio::runtime::Handle,
     ui: slint::Weak<AppWindow>,
@@ -87,12 +87,10 @@ pub fn run(data_dir: PathBuf) -> Result<(), slint::PlatformError> {
     let _guard = rt.enter();
 
     let sk = crate::store::load_or_create_key(&data_dir);
-    let me = sk.pubkey();
     let ui = AppWindow::new()?;
 
     let app = Arc::new(App {
-        sk,
-        me,
+        identity: RwLock::new((sk.clone(), sk.pubkey())),
         net: Network::new(),
         rt: rt.handle().clone(),
         ui: ui.as_weak(),
@@ -140,7 +138,7 @@ pub fn run(data_dir: PathBuf) -> Result<(), slint::PlatformError> {
 }
 
 fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
-    ui.set_npub(app.me.to_npub().into());
+    ui.set_npub(app.me().to_npub().into());
 
     let mut currencies: Vec<SharedString> = vec!["all".into()];
     currencies.extend(prices::currency_codes().into_iter().map(SharedString::from));
@@ -339,10 +337,13 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     });
 
     let a = app.clone();
+    ui.on_import_nsec(move |nsec| a.import_nsec(&nsec));
+
+    let a = app.clone();
     ui.on_reveal_nsec(move || {
         if let Some(ui) = a.ui.upgrade() {
             if ui.get_nsec().is_empty() {
-                ui.set_nsec(a.sk.to_nsec().into());
+                ui.set_nsec(a.sk().to_nsec().into());
             } else {
                 ui.set_nsec("".into());
             }
@@ -383,6 +384,52 @@ fn checked_names(model: &ModelRc<PayItem>) -> Vec<String> {
 }
 
 impl App {
+    fn sk(&self) -> SecretKey {
+        self.identity.read().unwrap().0.clone()
+    }
+
+    fn me(&self) -> PubKey {
+        self.identity.read().unwrap().1
+    }
+
+    /// switch to a key we used before. its reputation comes along, as reports are public, but
+    /// whatever it did on other devices doesn't, so we refuse while this key has trades going on.
+    fn import_nsec(self: &Arc<Self>, input: &str) {
+        let Ok(sk) = input.trim().parse::<SecretKey>() else {
+            self.status("that is not a valid nsec");
+            return;
+        };
+        if sk == self.sk() {
+            self.status("that is already your key");
+            return;
+        }
+        let busy = !self.open_offers().is_empty() || {
+            let s = &self.store.lock().unwrap().state;
+            !s.trades.is_empty()
+        };
+        if busy {
+            self.status(
+                "close your open offers and end your ongoing trades before importing a key",
+            );
+            return;
+        }
+        if let Err(err) = self.store.lock().unwrap().replace_key(&self.sk(), &sk) {
+            self.status(format!("failed to save the key: {err}"));
+            return;
+        }
+        *self.identity.write().unwrap() = (sk.clone(), sk.pubkey());
+
+        self.restart_ping_sub();
+        self.render_offers();
+        self.render_trades();
+        let npub = self.me().to_npub();
+        let _ = self.ui.upgrade_in_event_loop(move |ui| {
+            ui.set_npub(npub.into());
+            ui.set_nsec("".into());
+        });
+        self.status("key imported");
+    }
+
     fn status(&self, msg: impl Into<String>) {
         let msg: String = msg.into();
         log::info!("{msg}");
@@ -558,7 +605,7 @@ impl App {
             // our own offers only show while we still have them open, a relay may have
             // ignored the deletion of one we closed
             let mine: HashSet<ID> = app.open_offers().iter().map(|o| o.id).collect();
-            offers.retain(|o| o.maker != app.me || mine.contains(&o.id));
+            offers.retain(|o| o.maker != app.me() || mine.contains(&o.id));
             offers.sort_by_key(|o| std::cmp::Reverse(o.created_at));
             let count = offers.len();
             *app.offers.lock().unwrap() = offers;
@@ -633,7 +680,7 @@ impl App {
             maker: o.maker.to_npub().into(),
             maker_short: short_npub(&o.maker).into(),
             maker_label: self.label(&o.maker).into(),
-            mine: o.maker == self.me,
+            mine: o.maker == self.me(),
             side: o.side.as_str().into(),
             currency: o.currency.clone().into(),
             price_api: o.price_api.clone().into(),
@@ -810,7 +857,7 @@ impl App {
             relays: relays.clone(),
             description: ui.get_create_description().trim().to_string(),
         }
-        .to_event(&self.sk);
+        .to_event(&self.sk());
         if let Some(offer) = Offer::from_event(&evt) {
             self.offers.lock().unwrap().insert(0, offer);
         }
@@ -902,7 +949,7 @@ impl App {
         } else {
             mine.relays
         };
-        let evt = deletion(&self.sk, &mine.event.id, KIND_OFFER);
+        let evt = deletion(&self.sk(), &mine.event.id, KIND_OFFER);
         let app = self.clone();
         self.rt.spawn(async move {
             let (ok, total) = app.publish(relays, evt).await;
@@ -925,7 +972,7 @@ impl App {
         };
         let filter = Filter {
             kinds: Some(vec![KIND_PING]),
-            tags: Some(vec![TagQuery("p".into(), vec![self.me.to_hex()])]),
+            tags: Some(vec![TagQuery("p".into(), vec![self.me().to_hex()])]),
             since: Some(Timestamp::now()),
             ..Default::default()
         };
@@ -936,7 +983,7 @@ impl App {
     /// someone wants to trade with us: that starts a trade, unless there is one going on already
     fn on_ping(self: &Arc<Self>, evt: Event) {
         let peer = evt.pubkey;
-        if peer == self.me || !evt.verify_signature() || self.is_blocked(&peer) {
+        if peer == self.me() || !evt.verify_signature() || self.is_blocked(&peer) {
             return;
         }
         let is_new = {
@@ -991,7 +1038,7 @@ impl App {
         else {
             return;
         };
-        let conv = Conversation::new(&self.sk, peer);
+        let conv = Conversation::new(&self.sk(), peer);
         let filter = Filter {
             kinds: Some(vec![KIND_DM]),
             authors: Some(vec![conv.pubkey()]),
@@ -1051,7 +1098,7 @@ impl App {
         else {
             return;
         };
-        if offer.maker == self.me {
+        if offer.maker == self.me() {
             return;
         }
         if self.is_blocked(&offer.maker) {
@@ -1090,7 +1137,7 @@ impl App {
         let Some(relays) = self.trade_relays(&peer) else {
             return;
         };
-        let evt = ping(&self.sk, &peer);
+        let evt = ping(&self.sk(), &peer);
         let app = self.clone();
         self.rt.spawn(async move {
             app.publish(relays, evt).await;
@@ -1109,7 +1156,7 @@ impl App {
 
     /// open the ongoing trade with someone, starting one if there is none
     fn open_trade(self: &Arc<Self>, peer: PubKey) {
-        if peer == self.me {
+        if peer == self.me() {
             return;
         }
         let created = {
@@ -1247,7 +1294,7 @@ impl App {
             self.status("unblock them first");
             return;
         }
-        let conv = Conversation::new(&self.sk, peer);
+        let conv = Conversation::new(&self.sk(), peer);
         let (relays, needs_ping, evt) = {
             let mut store = self.store.lock().unwrap();
             let state = &mut store.state;
@@ -1255,7 +1302,7 @@ impl App {
                 return;
             };
             let offer = t.offer_id.as_deref().and_then(|h| ID::from_hex(h).ok());
-            let (rumor, evt) = conv.wrap(&self.me, text, offer);
+            let (rumor, evt) = conv.wrap(&self.me(), text, offer);
             // until they answer we keep poking them, as they only start listening after a ping
             let needs_ping = !t.messages.iter().any(|m| !m.mine);
             let relays = t.relays.clone();
@@ -1437,7 +1484,7 @@ impl App {
 
     /// labels live only in the local state, they are never published
     fn set_label(self: &Arc<Self>, peer: PubKey, label: &str) {
-        if peer == self.me {
+        if peer == self.me() {
             return;
         }
         {
@@ -1499,7 +1546,7 @@ impl App {
     fn open_profile(self: &Arc<Self>, who: PubKey) {
         *self.current_profile.lock().unwrap() = Some(who);
         let blocked = self.is_blocked(&who);
-        let is_me = who == self.me;
+        let is_me = who == self.me();
         let label = self.label(&who);
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
             if ui.get_page() != 5 {
@@ -1521,17 +1568,17 @@ impl App {
     /// our own reports about them first. if those are few, what our most frequent successful
     /// trade partners have said about them.
     fn render_profile(self: &Arc<Self>, who: PubKey, ask_relays: bool) {
-        let is_me = who == self.me;
+        let is_me = who == self.me();
         let (own, trusted, others, labels) = {
             let store = self.store.lock().unwrap();
             let labels = store.state.labels.clone();
             if is_me {
-                (store.reports_by(&self.me), vec![], vec![], labels)
+                (store.reports_by(&self.me()), vec![], vec![], labels)
             } else {
-                let own = store.reports_about(&[self.me], &who);
+                let own = store.reports_about(&[self.me()], &who);
                 let trusted: Vec<PubKey> = if own.len() < ENOUGH_OWN_REPORTS {
                     store
-                        .top_trade_partners(&self.me, TRUSTED_PEERS_TO_ASK + 1)
+                        .top_trade_partners(&self.me(), TRUSTED_PEERS_TO_ASK + 1)
                         .into_iter()
                         .filter(|pk| *pk != who)
                         .take(TRUSTED_PEERS_TO_ASK)
@@ -1624,10 +1671,10 @@ impl App {
     }
 
     fn publish_report(self: &Arc<Self>, peer: PubKey, success: bool, comment: &str) {
-        if peer == self.me {
+        if peer == self.me() {
             return;
         }
-        let evt = trade_report(&self.sk, &peer, success, comment);
+        let evt = trade_report(&self.sk(), &peer, success, comment);
         self.store.lock().unwrap().save_event(&evt);
 
         let app = self.clone();

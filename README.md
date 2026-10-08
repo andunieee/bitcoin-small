@@ -14,7 +14,8 @@ The user guide lives in `docs/` and is published to <https://andunieee.github.io
 
 The app generates a nostr secret key on first launch (`ritualistic::SecretKey::generate()`) and stores it on the device.
 Your npub is your only identity. Offers carry no username or profile, only the npub that signed them. You can reveal the
-nsec in Settings to back it up.
+nsec in Settings to back it up, or import an nsec you used before. Importing is refused while there are open offers or
+ongoing trades, since those belong to the current key. The replaced key is kept as `key.<pubkey>.old`.
 
 ### Offers (kind `6012`)
 

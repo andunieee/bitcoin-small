@@ -23,6 +23,10 @@ Your reputation, the reports people write about you, is tied to that key. If you
 > Back it up: tap **Reveal nsec** in Settings and write it down somewhere safe. Anyone who has your nsec can act as
 > you, so never share it, and never paste it into a website or chat.
 
+If you had a key before, paste its nsec under **Settings → Import a key**. That brings back your identity and the
+reputation that goes with it, but not its trades or messages, which stay on the device they happened on. Close your
+open offers and end your ongoing trades first.
+
 ## Relays
 
 Relays are the servers that carry offers, messages and reports. The app comes with a list of paid relays, which

@@ -126,6 +126,16 @@ impl Store {
         }
     }
 
+    /// save `new` as our key. the old one stays next to it as `key.<pubkey>.old`, just in case
+    pub fn replace_key(&self, old: &SecretKey, new: &SecretKey) -> std::io::Result<()> {
+        let path = self.dir.join("key");
+        let backup = self.dir.join(format!("key.{}.old", old.pubkey().to_hex()));
+        std::fs::write(&backup, old.to_hex())?;
+        let tmp = self.dir.join("key.tmp");
+        std::fs::write(&tmp, new.to_hex())?;
+        std::fs::rename(&tmp, &path)
+    }
+
     pub fn persist(&self) {
         let tmp = self.dir.join("state.json.tmp");
         let res = serde_json::to_vec(&self.state)

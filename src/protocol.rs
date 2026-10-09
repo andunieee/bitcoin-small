@@ -3,6 +3,14 @@
 use ritualistic::message_encryption::{decrypt, encrypt, generate_conversation_key};
 use ritualistic::{Event, EventTemplate, ID, Kind, PubKey, SecretKey, Tags, Timestamp};
 
+/// `Timestamp::now()`, which in ritualistic 0.2.3 asks `SystemTime` and so panics in the browser
+pub fn now() -> Timestamp {
+    #[cfg(target_arch = "wasm32")]
+    return Timestamp((js_sys::Date::now() / 1000.0) as u32);
+    #[cfg(not(target_arch = "wasm32"))]
+    return Timestamp::now();
+}
+
 pub const KIND_OFFER: Kind = Kind(6012);
 pub const KIND_DM: Kind = Kind(8021);
 pub const KIND_PING: Kind = Kind(28022);
@@ -147,7 +155,7 @@ pub struct NewOffer {
 
 impl NewOffer {
     pub fn to_event(&self, sk: &SecretKey) -> Event {
-        let now = Timestamp::now();
+        let now = now();
         let mut tags = vec![
             vec!["side".into(), self.side.as_str().into()],
             vec!["currency".into(), self.currency.to_uppercase()],
@@ -191,7 +199,7 @@ impl Offer {
         let tag = |k: &str| evt.tags.find(k).map(|t| t[1].clone());
         let expiration = Timestamp(tag("expiration")?.parse().ok()?);
         // never accept offers that claim to live longer than allowed or that are already dead
-        let now = Timestamp::now();
+        let now = now();
         if expiration <= now || expiration.0 > evt.created_at.0 + OFFER_TTL_SECS + 60 {
             return None;
         }
@@ -260,7 +268,7 @@ impl Conversation {
         let mut rumor = Rumor {
             id: String::new(),
             pubkey: me.to_hex(),
-            created_at: Timestamp::now().0,
+            created_at: now().0,
             kind: KIND_RUMOR.0,
             tags,
             content: text.to_string(),
@@ -274,7 +282,7 @@ impl Conversation {
         )
         .expect("message size is bounded by the ui");
 
-        let now = Timestamp::now();
+        let now = now();
         let evt = EventTemplate {
             created_at: now,
             kind: KIND_DM,
@@ -297,7 +305,7 @@ impl Conversation {
             .tags
             .find("expiration")
             .and_then(|t| t[1].parse::<u32>().ok());
-        if expiration.is_some_and(|exp| exp <= Timestamp::now().0) {
+        if expiration.is_some_and(|exp| exp <= now().0) {
             return None;
         }
         let plain = decrypt(&evt.content, &self.key).ok()?;
@@ -340,7 +348,7 @@ impl Rumor {
 /// "there is a DM for you from me"
 pub fn ping(me: &SecretKey, peer: &PubKey) -> Event {
     EventTemplate {
-        created_at: Timestamp::now(),
+        created_at: now(),
         kind: KIND_PING,
         tags: Tags(vec![vec!["p".into(), peer.to_hex()]]),
         content: String::new(),
@@ -352,7 +360,7 @@ pub fn ping(me: &SecretKey, peer: &PubKey) -> Event {
 /// nip-09: ask relays to drop one of our events
 pub fn deletion(me: &SecretKey, id: &ID, kind: Kind) -> Event {
     EventTemplate {
-        created_at: Timestamp::now(),
+        created_at: now(),
         kind: KIND_DELETION,
         tags: Tags(vec![
             vec!["e".into(), id.to_hex()],
@@ -365,7 +373,7 @@ pub fn deletion(me: &SecretKey, id: &ID, kind: Kind) -> Event {
 
 pub fn trade_report(me: &SecretKey, peer: &PubKey, success: bool, comment: &str) -> Event {
     EventTemplate {
-        created_at: Timestamp::now(),
+        created_at: now(),
         kind: if success {
             KIND_TRADE_SUCCESS
         } else {

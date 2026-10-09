@@ -13,6 +13,9 @@ Download the latest version from the [releases page](https://github.com/anduniee
 - **Linux, macOS, Windows**: the file for your system. On macOS and Linux you may need to mark it as executable
   before running it.
 
+Or [use it in your browser](../app/), with nothing to install. Your key and your trades stay in that browser, so clearing
+its site data erases them. Back up your key first (see below).
+
 ## Your key is your identity
 
 On first launch the app creates a secret key and keeps it on your device. Its public half, your **npub**, is the

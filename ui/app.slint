@@ -1271,7 +1271,7 @@ export component AppWindow inherits Window {
                         }
 
                         Muted {
-                            text: "use an nsec you had before. this brings back that identity and its reputation, but not its trades or messages, which stay on the device they happened on. your current key is kept in the app's data folder.";
+                            text: "use an nsec you had before. this brings back that identity and its reputation, but not its trades or messages, which stay on the device they happened on. your current key is kept on this device as a backup.";
                         }
 
                         HorizontalLayout {
@@ -1315,7 +1315,7 @@ export component AppWindow inherits Window {
                             }
 
                             Button {
-                                text: "✕";
+                                text: "×";
                                 clicked => {
                                     root.remove-relay(relay.url);
                                 }

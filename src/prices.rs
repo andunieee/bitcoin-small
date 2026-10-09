@@ -89,20 +89,29 @@ impl PriceApi {
 }
 
 async fn get_json(url: &str) -> Result<serde_json::Value, String> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .user_agent("bitcoin-small")
-        .build()
-        .map_err(|e| e.to_string())?
-        .get(url)
-        .send()
+    let get = async {
+        // browsers set the user agent themselves
+        #[cfg(not(target_arch = "wasm32"))]
+        let client = reqwest::Client::builder()
+            .user_agent("bitcoin-small")
+            .build();
+        #[cfg(target_arch = "wasm32")]
+        let client = reqwest::Client::builder().build();
+        client
+            .map_err(|e| e.to_string())?
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?
+            .json()
+            .await
+            .map_err(|e| e.to_string())
+    };
+    tokio_with_wasm::alias::time::timeout(Duration::from_secs(15), get)
         .await
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json()
-        .await
-        .map_err(|e| e.to_string())
+        .map_err(|_| "timed out".to_string())?
 }
 
 /// some apis return numbers, others return numeric strings

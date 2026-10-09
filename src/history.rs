@@ -52,12 +52,7 @@ pub struct History {
 }
 
 impl History {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn open(dir: &std::path::Path) -> Result<Self, String> {
-        Self::from_database(Database::create(dir.join("history.redb")).map_err(err)?)
-    }
-
-    /// e.g. one backed by `ritualistic::OpfsBackend` in the browser
+    /// a file on disk, or one backed by `ritualistic::OpfsBackend` in the browser
     pub fn from_database(db: Database) -> Result<Self, String> {
         // read transactions can't open tables that don't exist yet
         let txn = db.begin_write().map_err(err)?;

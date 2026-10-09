@@ -150,6 +150,10 @@ Everything is in the app's data directory:
 - `history.redb`: past trades, concluded or archived, in [redb](https://www.redb.org).
 - `events.redb`: trade reports, yours and other people's.
 
+In the browser, `key` and `state.json` go to localStorage under `bitcoin-small/`, and the two redb databases to the
+origin private file system, through `ritualistic::OpfsBackend`. They are held in memory and saved in the background
+after each commit, so closing the tab right after a change can lose it.
+
 ### Trade reports (kinds `8022` and `8020`)
 
 When a trade is over, either party can publish a report about the other:
@@ -188,7 +192,8 @@ with a newcomer.
 | `src/app.rs`      | relay subscriptions, publishing, and the glue to the UI                                                                 |
 | `ui/app.slint`    | the interface: market, offer, new offer, trades, trade, profile, people, settings                                       |
 | `src/lib.rs`      | Android entry point (`android_main`)                                                                                    |
-| `src/main.rs`     | desktop entry point, for development                                                                                    |
+| `src/main.rs`     | desktop entry point, and the web entry point when built for wasm                                                        |
+| `web/index.html`  | the page for the web build, with the canvas the app draws into                                                          |
 
 ## Building
 
@@ -210,6 +215,18 @@ cargo apk build --lib --release
 
 The APK settings (package name, SDK versions and the `INTERNET` permission) are under `[package.metadata.android]` in
 `Cargo.toml`.
+
+For the web you need [trunk](https://trunkrs.dev):
+
+```sh
+rustup target add wasm32-unknown-unknown
+trunk serve web/index.html                                   # on http://127.0.0.1:8080
+trunk build web/index.html --release --dist target/web       # a static site, to host anywhere
+```
+
+The databases need the origin private file system, which browsers only give to pages served over https or from
+localhost. `.github/workflows/pages.yml` publishes the web build at <https://andunieee.github.io/bitcoin-small/app/>,
+next to the user guide.
 
 ### Releases
 

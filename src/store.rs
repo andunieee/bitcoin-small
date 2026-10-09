@@ -1,8 +1,10 @@
 //! everything this app keeps on the device: the key, the json state (settings, open offers,
 //! ongoing trades), the history of past trades and trade reports, each in a redb database.
+//!
+//! the key and the json state are small files: a directory on disk, or localStorage in the
+//! browser. the redb databases live on disk, or in the browser's origin private file system.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
 
 use ritualistic::database::EventDatabase;
 use ritualistic::{Event, Filter, PubKey, RedbEventDatabase, SecretKey, TagQuery};
@@ -26,16 +28,68 @@ pub const ENOUGH_OWN_REPORTS: usize = 20;
 /// how many of our most-traded-with peers we ask about someone
 pub const TRUSTED_PEERS_TO_ASK: usize = 10;
 
-pub fn load_or_create_key(dir: &Path) -> SecretKey {
-    let path = dir.join("key");
-    if let Ok(hex) = std::fs::read_to_string(&path)
+/// where the small files go. each write replaces the whole file at once.
+pub trait Files: Send + Sync {
+    fn read(&self, name: &str) -> Option<String>;
+    fn write(&self, name: &str, contents: &str) -> std::io::Result<()>;
+}
+
+/// files in a directory on disk
+#[cfg(not(target_arch = "wasm32"))]
+pub struct Dir(pub std::path::PathBuf);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Files for Dir {
+    fn read(&self, name: &str) -> Option<String> {
+        std::fs::read_to_string(self.0.join(name)).ok()
+    }
+
+    fn write(&self, name: &str, contents: &str) -> std::io::Result<()> {
+        let tmp = self.0.join(format!("{name}.tmp"));
+        std::fs::write(&tmp, contents)?;
+        std::fs::rename(&tmp, self.0.join(name))
+    }
+}
+
+/// the browser's localStorage, every name under one prefix
+#[cfg(target_arch = "wasm32")]
+pub struct LocalStorage;
+
+#[cfg(target_arch = "wasm32")]
+impl LocalStorage {
+    fn storage() -> std::io::Result<web_sys::Storage> {
+        web_sys::window()
+            .and_then(|w| w.local_storage().ok().flatten())
+            .ok_or_else(|| std::io::Error::other("localStorage is not available"))
+    }
+
+    fn key(name: &str) -> String {
+        format!("bitcoin-small/{name}")
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Files for LocalStorage {
+    fn read(&self, name: &str) -> Option<String> {
+        Self::storage().ok()?.get_item(&Self::key(name)).ok()?
+    }
+
+    fn write(&self, name: &str, contents: &str) -> std::io::Result<()> {
+        Self::storage()?
+            .set_item(&Self::key(name), contents)
+            .map_err(|e| std::io::Error::other(format!("{e:?}")))
+    }
+}
+
+pub fn load_or_create_key(files: &dyn Files) -> SecretKey {
+    if let Some(hex) = files.read("key")
         && let Ok(sk) = hex.trim().parse::<SecretKey>()
     {
         return sk;
     }
     let sk = SecretKey::generate();
-    if let Err(err) = std::fs::write(&path, sk.to_hex()) {
-        log::error!("failed to save the key at {}: {err}", path.display());
+    if let Err(err) = files.write("key", &sk.to_hex()) {
+        log::error!("failed to save the key: {err}");
     }
     sk
 }
@@ -100,26 +154,50 @@ pub struct State {
 }
 
 pub struct Store {
-    dir: PathBuf,
+    pub files: Box<dyn Files>,
     pub state: State,
     pub db: RedbEventDatabase,
     pub history: History,
 }
 
 impl Store {
-    pub fn open(dir: &Path) -> Self {
-        let state = std::fs::read(dir.join("state.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<State>(&b).ok())
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open(dir: &std::path::Path) -> Self {
+        let db = RedbEventDatabase::open(dir.join("events.redb")).expect("failed to open database");
+        let history = redb::Database::create(dir.join("history.redb"))
+            .map_err(|e| e.to_string())
+            .and_then(History::from_database)
+            .expect("failed to open the trade history");
+        Self::new(Box::new(Dir(dir.to_path_buf())), db, history)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn open() -> Self {
+        let db = RedbEventDatabase::open_opfs("events.redb")
+            .await
+            .expect("failed to open database");
+        let history = match ritualistic::OpfsBackend::open("history.redb").await {
+            Ok(backend) => redb::Database::builder()
+                .create_with_backend(backend)
+                .map_err(|e| e.to_string())
+                .and_then(History::from_database),
+            Err(err) => Err(err.to_string()),
+        }
+        .expect("failed to open the trade history");
+        Self::new(Box::new(LocalStorage), db, history)
+    }
+
+    fn new(files: Box<dyn Files>, db: RedbEventDatabase, history: History) -> Self {
+        let state = files
+            .read("state.json")
+            .and_then(|s| serde_json::from_str::<State>(&s).ok())
             .unwrap_or_else(|| State {
                 app_relays: DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect(),
                 known_relays: DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect(),
                 ..Default::default()
             });
-        let db = RedbEventDatabase::open(dir.join("events.redb")).expect("failed to open database");
-        let history = History::open(dir).expect("failed to open the trade history");
         Self {
-            dir: dir.to_path_buf(),
+            files,
             state,
             db,
             history,
@@ -128,20 +206,15 @@ impl Store {
 
     /// save `new` as our key. the old one stays next to it as `key.<pubkey>.old`, just in case
     pub fn replace_key(&self, old: &SecretKey, new: &SecretKey) -> std::io::Result<()> {
-        let path = self.dir.join("key");
-        let backup = self.dir.join(format!("key.{}.old", old.pubkey().to_hex()));
-        std::fs::write(&backup, old.to_hex())?;
-        let tmp = self.dir.join("key.tmp");
-        std::fs::write(&tmp, new.to_hex())?;
-        std::fs::rename(&tmp, &path)
+        let backup = format!("key.{}.old", old.pubkey().to_hex());
+        self.files.write(&backup, &old.to_hex())?;
+        self.files.write("key", &new.to_hex())
     }
 
     pub fn persist(&self) {
-        let tmp = self.dir.join("state.json.tmp");
-        let res = serde_json::to_vec(&self.state)
+        let res = serde_json::to_string(&self.state)
             .map_err(std::io::Error::other)
-            .and_then(|b| std::fs::write(&tmp, b))
-            .and_then(|_| std::fs::rename(&tmp, self.dir.join("state.json")));
+            .and_then(|json| self.files.write("state.json", &json));
         if let Err(err) = res {
             log::error!("failed to persist state: {err}");
         }

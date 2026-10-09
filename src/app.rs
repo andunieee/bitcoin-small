@@ -1,7 +1,6 @@
 //! glue between the ui, the relays and the local store
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -9,6 +8,8 @@ use ritualistic::{
     Event, Filter, ID, Network, PubKey, PublishOptions, SecretKey, SubscriptionOptions, TagQuery,
     Timestamp,
 };
+use tokio_with_wasm::alias as tokio;
+
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::form::{self, OfferTemplate};
@@ -55,7 +56,6 @@ struct App {
     /// our key and its pubkey. it only changes when an nsec is imported
     identity: RwLock<(SecretKey, PubKey)>,
     net: Network,
-    rt: tokio::runtime::Handle,
     ui: slint::Weak<AppWindow>,
     store: Mutex<Store>,
 
@@ -78,24 +78,42 @@ struct App {
     current_profile: Mutex<Option<PubKey>>,
 }
 
-pub fn run(data_dir: PathBuf) -> Result<(), slint::PlatformError> {
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run(data_dir: std::path::PathBuf) -> Result<(), slint::PlatformError> {
     let _ = std::fs::create_dir_all(&data_dir);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("failed to start tokio");
-    // ritualistic spawns tasks (even on drop), so the runtime must be reachable from the ui thread
+    // ritualistic spawns tasks (even on drop), and so do we from the ui callbacks, so the runtime
+    // must be reachable from the ui thread
     let _guard = rt.enter();
 
-    let sk = crate::store::load_or_create_key(&data_dir);
+    let ui = start(Store::open(&data_dir))?;
+    ui.run()
+}
+
+/// the browser build: everything runs on the page's only thread, and the databases have to be
+/// loaded from the origin private file system before anything else
+#[cfg(target_arch = "wasm32")]
+pub async fn run() -> Result<(), slint::PlatformError> {
+    let ui = start(Store::open().await)?;
+    // in the browser this returns right away, with the event loop running on its own
+    ui.run()?;
+    // which would take the window down with it when `ui` is dropped
+    std::mem::forget(ui);
+    Ok(())
+}
+
+fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
+    let sk = crate::store::load_or_create_key(&*store.files);
     let ui = AppWindow::new()?;
 
     let app = Arc::new(App {
         identity: RwLock::new((sk.clone(), sk.pubkey())),
         net: Network::new(),
-        rt: rt.handle().clone(),
         ui: ui.as_weak(),
-        store: Mutex::new(Store::open(&data_dir)),
+        store: Mutex::new(store),
         offers: Mutex::new(vec![]),
         prices: Mutex::new(HashMap::new()),
         price_errors: Mutex::new(HashMap::new()),
@@ -128,14 +146,14 @@ pub fn run(data_dir: PathBuf) -> Result<(), slint::PlatformError> {
     app.refresh_offers();
 
     let a = app.clone();
-    rt.spawn(async move {
+    tokio::spawn(async move {
         loop {
             a.fetch_prices().await;
             tokio::time::sleep(PRICE_REFRESH).await;
         }
     });
 
-    ui.run()
+    Ok(ui)
 }
 
 fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
@@ -525,24 +543,23 @@ impl App {
             .map(|url| {
                 let (app, url, filter) = (self.clone(), url.clone(), filter.clone());
                 let (on_event, seen) = (on_event.clone(), seen.clone());
-                self.rt
-                    .spawn(async move {
-                        loop {
-                            let mut sub = app
-                                .net
-                                .subscribe([&url], filter.clone(), SubscriptionOptions::default())
-                                .await;
-                            while let Some(occ) = sub.recv().await {
-                                if let ritualistic::Occurrence::Event(evt, _) = occ
-                                    && seen.lock().unwrap().insert(evt.id)
-                                {
-                                    on_event(&app, *evt);
-                                }
+                tokio::spawn(async move {
+                    loop {
+                        let mut sub = app
+                            .net
+                            .subscribe([&url], filter.clone(), SubscriptionOptions::default())
+                            .await;
+                        while let Some(occ) = sub.recv().await {
+                            if let ritualistic::Occurrence::Event(evt, _) = occ
+                                && seen.lock().unwrap().insert(evt.id)
+                            {
+                                on_event(&app, *evt);
                             }
-                            tokio::time::sleep(RECONNECT_DELAY).await;
                         }
-                    })
-                    .abort_handle()
+                        tokio::time::sleep(RECONNECT_DELAY).await;
+                    }
+                })
+                .abort_handle()
             })
             .collect();
         LiveSub(handles)
@@ -581,10 +598,10 @@ impl App {
 
     fn refresh_offers(self: &Arc<Self>) {
         let app = self.clone();
-        self.rt.spawn(async move {
+        tokio::spawn(async move {
             let _ = app.ui.upgrade_in_event_loop(|ui| ui.set_loading(true));
             let relays = app.app_relays();
-            let since = Timestamp(Timestamp::now().0.saturating_sub(OFFER_TTL_SECS));
+            let since = Timestamp(now().0.saturating_sub(OFFER_TTL_SECS));
             let events = app
                 .fetch(
                     relays.clone(),
@@ -635,7 +652,7 @@ impl App {
             .into_iter()
             .filter_map(|(cur, api_id)| {
                 let api = PriceApi::from_id(&api_id)?;
-                Some(self.rt.spawn(async move {
+                Some(tokio::spawn(async move {
                     let res = api.fetch(&cur).await;
                     ((cur, api_id), res)
                 }))
@@ -774,8 +791,7 @@ impl App {
         *self.form_pair.lock().unwrap() = pair.clone();
         if !self.prices.lock().unwrap().contains_key(&pair) {
             let app = self.clone();
-            self.rt
-                .spawn(async move { app.fetch_pairs(HashSet::from([pair])).await });
+            tokio::spawn(async move { app.fetch_pairs(HashSet::from([pair])).await });
         }
         self.render_create_preview();
     }
@@ -887,7 +903,7 @@ impl App {
         self.status("publishing offer…");
 
         let app = self.clone();
-        self.rt.spawn(async move {
+        tokio::spawn(async move {
             let id = evt.id;
             let (ok, total) = app.publish(app.app_relays(), evt).await;
             app.status(format!("offer published to {}/{total} relays", ok.len()));
@@ -949,7 +965,7 @@ impl App {
         };
         let evt = deletion(&self.sk(), &mine.event.id, KIND_OFFER);
         let app = self.clone();
-        self.rt.spawn(async move {
+        tokio::spawn(async move {
             let (ok, total) = app.publish(relays, evt).await;
             app.status(format!("offer deleted from {}/{total} relays", ok.len()));
         });
@@ -971,7 +987,7 @@ impl App {
         let filter = Filter {
             kinds: Some(vec![KIND_PING]),
             tags: Some(vec![TagQuery("p".into(), vec![self.me().to_hex()])]),
-            since: Some(Timestamp::now()),
+            since: Some(now()),
             ..Default::default()
         };
         let sub = self.live(&relays, filter, |app, evt| app.on_ping(evt));
@@ -1110,7 +1126,7 @@ impl App {
                 .trades
                 .entry(offer.maker.to_hex())
                 .or_insert_with(|| Trade {
-                    started_at: Timestamp::now().0,
+                    started_at: now().0,
                     started_by_me: true,
                     ..Default::default()
                 });
@@ -1137,7 +1153,7 @@ impl App {
         };
         let evt = ping(&self.sk(), &peer);
         let app = self.clone();
-        self.rt.spawn(async move {
+        tokio::spawn(async move {
             app.publish(relays, evt).await;
         });
     }
@@ -1168,7 +1184,7 @@ impl App {
                     Trade {
                         relays,
                         offer_summary: "direct chat".into(),
-                        started_at: Timestamp::now().0,
+                        started_at: now().0,
                         started_by_me: true,
                         ..Default::default()
                     },
@@ -1321,7 +1337,7 @@ impl App {
             self.send_ping(peer);
         }
         let app = self.clone();
-        self.rt.spawn(async move {
+        tokio::spawn(async move {
             if needs_ping {
                 // give the other side a moment to open the conversation subscription
                 tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -1344,10 +1360,9 @@ impl App {
             let Some(trade) = store.state.trades.get(&peer.to_hex()).cloned() else {
                 return;
             };
-            if let Err(err) =
-                store
-                    .history
-                    .add(&peer.to_hex(), &trade, outcome, comment, Timestamp::now().0)
+            if let Err(err) = store
+                .history
+                .add(&peer.to_hex(), &trade, outcome, comment, now().0)
             {
                 drop(store);
                 self.status(format!("failed to save the trade in the history: {err}"));
@@ -1636,7 +1651,7 @@ impl App {
 
         if ask_relays && !trusted.is_empty() {
             let app = self.clone();
-            self.rt.spawn(async move {
+            tokio::spawn(async move {
                 let events = app
                     .fetch(
                         app.app_relays(),
@@ -1676,7 +1691,7 @@ impl App {
         self.store.lock().unwrap().save_event(&evt);
 
         let app = self.clone();
-        self.rt.spawn(async move {
+        tokio::spawn(async move {
             let (ok, total) = app.publish(app.app_relays(), evt).await;
             app.status(format!(
                 "trade report published to {}/{total} relays",
@@ -1752,7 +1767,7 @@ fn short_npub(pk: &PubKey) -> String {
 }
 
 fn ago(ts: Timestamp) -> String {
-    let secs = Timestamp::now().0.saturating_sub(ts.0);
+    let secs = now().0.saturating_sub(ts.0);
     match secs {
         0..60 => "just now".into(),
         60..3600 => format!("{}m ago", secs / 60),

@@ -1,4 +1,5 @@
-# builds the user guide in docs/ with zola and publishes it to github pages on every push to master
+# builds the user guide in docs/ with zola, and the web build of the app under /app/, and publishes both to github
+# pages on every push to master
 name: pages
 
 on:
@@ -27,6 +28,17 @@ jobs:
           curl -sSL https://github.com/getzola/zola/releases/download/v0.23.6/zola-v0.23.6-x86_64-unknown-linux-gnu.tar.gz \
             | tar -xz -C /usr/local/bin
       - run: zola --root docs build --base-url "${{ steps.pages.outputs.base_url }}" --output-dir site
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: install trunk
+        run: |
+          curl -sSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin
+      - run: >-
+          trunk build web/index.html --release --locked
+          --public-url "${{ steps.pages.outputs.base_path }}/app/" --dist site/app
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

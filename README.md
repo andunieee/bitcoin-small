@@ -147,7 +147,7 @@ Everything is in the app's data directory:
 - `key`: your secret key.
 - `state.json`: settings, labels, your open offers and the relays that took them, ongoing trades with their messages,
   and the last few offers you made, used to fill the new offer form. It is loaded into memory on startup.
-- `history.sqlite`: past trades, concluded or archived (via [minisqlite](https://github.com/cursor/minisqlite)).
+- `history.redb`: past trades, concluded or archived, in [redb](https://www.redb.org).
 - `events.redb`: trade reports, yours and other people's.
 
 ### Trade reports (kinds `8022` and `8020`)
@@ -184,7 +184,7 @@ with a newcomer.
 | `src/prices.rs`   | hardcoded currencies, price APIs and their fetch functions, premium parsing                                             |
 | `src/store.rs`    | key, json state (relays, open offers, ongoing trades, rumor ids, blocklist, labels), redb event database, trust queries |
 | `src/form.rs`     | defaults for the new offer form, from the locale and your last offers                                                   |
-| `src/history.rs`  | past trades, in sqlite                                                                                                  |
+| `src/history.rs`  | past trades, in redb                                                                                                    |
 | `src/app.rs`      | relay subscriptions, publishing, and the glue to the UI                                                                 |
 | `ui/app.slint`    | the interface: market, offer, new offer, trades, trade, profile, people, settings                                       |
 | `src/lib.rs`      | Android entry point (`android_main`)                                                                                    |
@@ -195,7 +195,7 @@ with a newcomer.
 On the desktop, for development:
 
 ```sh
-cargo run                 # data goes in ~/.local/share/bitcoin-small, or set $BITCOIN_SMALL_DATA
+cargo run                 # data goes in ~/.local/share/bitcoin-small (%APPDATA% on windows), or set $BITCOIN_SMALL_DATA
 cargo test
 ```
 
@@ -214,6 +214,6 @@ The APK settings (package name, SDK versions and the `INTERNET` permission) are 
 ### Releases
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`. It builds binaries for Linux (x86_64, aarch64), macOS
-(aarch64, x86_64), plus the APK (not Windows: minisqlite only builds on unix), and attaches them to a GitHub release. The APK is signed with the
+(aarch64, x86_64) and Windows (x86_64), plus the APK, and attaches them to a GitHub release. The APK is signed with the
 keystore in the `ANDROID_KEYSTORE_BASE64` and `ANDROID_KEYSTORE_PASSWORD` repository secrets. Without them it is signed
 with a throwaway key, so Android won't install the next release over it.

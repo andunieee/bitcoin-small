@@ -1,5 +1,5 @@
 //! everything this app keeps on the device: the key, the json state (settings, open offers,
-//! ongoing trades), the history of past trades in sqlite and trade reports in an event database.
+//! ongoing trades), the history of past trades and trade reports, each in a redb database.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

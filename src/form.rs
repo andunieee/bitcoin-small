@@ -1,11 +1,20 @@
 //! defaults for the new offer form: every field comes from the last offers we made, so nobody
 //! has to fill in the same thing over and over. only when we never made one do we fall back to
-//! the system locale, the app relays and hardcoded choices.
+//! the system locale and hardcoded choices.
 
 use std::collections::HashMap;
 
 use crate::prices;
 use crate::protocol::{DEFAULT_BITCOIN_METHODS, payment_methods_for};
+
+/// free relays where people reach us about an offer. offers themselves go to the paid app relays,
+/// which is what makes identities cost something, but there is no reason the chat has to.
+pub const DEFAULT_NEGOTIATION_RELAYS: &[&str] = &[
+    "wss://relay.primal.net",
+    "wss://nos.lol",
+    "wss://nostr.mom",
+    "wss://relay.damus.io",
+];
 
 /// how many of our past offers the form learns from
 pub const RECENT_OFFERS: usize = 5;
@@ -33,11 +42,13 @@ pub struct Defaults {
 }
 
 /// `recent` is most recent first
-pub fn defaults(
-    recent: &[OfferTemplate],
-    locale_currency: &str,
-    app_relays: &[String],
-) -> Defaults {
+pub fn defaults(recent: &[OfferTemplate], locale_currency: &str) -> Defaults {
+    let fallback_relays = || {
+        DEFAULT_NEGOTIATION_RELAYS
+            .iter()
+            .map(|r| r.to_string())
+            .collect()
+    };
     let Some(last) = recent.first() else {
         return Defaults {
             side: "sell".into(),
@@ -47,7 +58,7 @@ pub fn defaults(
                 .iter()
                 .map(|m| m.to_string())
                 .collect(),
-            relays: app_relays.to_vec(),
+            relays: fallback_relays(),
         };
     };
     let avg = recent.iter().map(|t| t.premium).sum::<f64>() / recent.len() as f64;
@@ -62,7 +73,7 @@ pub fn defaults(
     let mut relays = or_last(majority(recent.iter().map(|t| &t.relays)), &last.relays);
     if relays.is_empty() {
         // only offers from before we remembered relays
-        relays = app_relays.to_vec();
+        relays = fallback_relays();
     }
     Defaults {
         side: mode(recent.iter().map(|t| t.side.as_str()))
@@ -246,12 +257,12 @@ mod tests {
 
     #[test]
     fn no_history() {
-        let d = defaults(&[], "BRL", &["wss://a/".into()]);
+        let d = defaults(&[], "BRL");
         assert_eq!(d.currency, "BRL");
         assert_eq!(d.side, "sell");
         assert_eq!(d.premium, 0.0);
         assert_eq!(d.bitcoin_methods, vec!["onchain", "lightning", "arkade"]);
-        assert_eq!(d.relays, vec!["wss://a/"]);
+        assert_eq!(d.relays, DEFAULT_NEGOTIATION_RELAYS);
         assert_eq!(default_api(&[], "USD"), "coingecko");
         assert_eq!(default_api(&[], "VES"), "yadio");
         assert!(default_payment_methods(&[], "USD").is_empty());
@@ -264,7 +275,7 @@ mod tests {
             tpl("USD", 1.0, &["Zelle"], &["lightning", "onchain"]),
             tpl("BRL", 0.0, &["PIX", "Nubank"], &["lightning", "liquid"]),
         ];
-        let d = defaults(&recent, "EUR", &[]);
+        let d = defaults(&recent, "EUR");
         assert_eq!(d.currency, "BRL");
         assert_eq!(d.premium, 1.0);
         assert_eq!(d.bitcoin_methods, vec!["lightning"]);
@@ -279,7 +290,7 @@ mod tests {
     #[test]
     fn ties_go_to_the_most_recent() {
         let recent = vec![tpl("USD", 0.0, &[], &[]), tpl("EUR", 0.0, &[], &[])];
-        assert_eq!(defaults(&recent, "BRL", &[]).currency, "USD");
+        assert_eq!(defaults(&recent, "BRL").currency, "USD");
     }
 
     #[test]
@@ -295,7 +306,7 @@ mod tests {
             ),
             tpl_relays("USD", 0.0, &["Zelle"], &["arkade"], &["wss://y/"]),
         ];
-        let d = defaults(&recent, "BRL", &["wss://app/".into()]);
+        let d = defaults(&recent, "BRL");
         assert_eq!(d.relays, vec!["wss://x/", "wss://y/"]);
         // no method reaches a majority: repeat the last offer, not the hardcoded defaults
         assert_eq!(d.bitcoin_methods, vec!["liquid"]);
@@ -303,12 +314,8 @@ mod tests {
         assert_eq!(default_api(&recent, "EUR"), "yadio");
         assert_eq!(default_payment_methods(&recent, "EUR"), vec!["Strike"]);
         // old history without relays
-        let d = defaults(
-            &[tpl("USD", 0.0, &[], &["onchain"])],
-            "BRL",
-            &["wss://app/".into()],
-        );
-        assert_eq!(d.relays, vec!["wss://app/"]);
+        let d = defaults(&[tpl("USD", 0.0, &[], &["onchain"])], "BRL");
+        assert_eq!(d.relays, DEFAULT_NEGOTIATION_RELAYS);
     }
 
     #[test]

@@ -550,7 +550,7 @@ impl App {
     }
 
     fn render_relays(&self) {
-        let (known, enabled, no_history) = {
+        let (known, enabled) = {
             let s = &self.store.lock().unwrap().state;
             let mut known = s.known_relays.clone();
             for r in &s.app_relays {
@@ -558,7 +558,7 @@ impl App {
                     known.push(r.clone());
                 }
             }
-            (known, s.app_relays.clone(), s.recent_offers.is_empty())
+            (known, s.app_relays.clone())
         };
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
             let items: Vec<RelayItem> = known
@@ -569,10 +569,6 @@ impl App {
                 })
                 .collect();
             ui.set_relays(ModelRc::new(VecModel::from(items)));
-            // once we made offers the form takes its relays from them instead
-            if no_history {
-                ui.set_create_relays(enabled.join(", ").into());
-            }
         });
     }
 
@@ -723,13 +719,10 @@ impl App {
     // ------------------------------------------------------------------------------ new offer
 
     /// fill the form with whatever our last offers had in common, or the locale's currency and
-    /// the app relays when we never made one
+    /// some free relays when we never made one
     fn reset_create_form(self: &Arc<Self>, ui: &AppWindow) {
-        let (recent, app_relays) = {
-            let s = &self.store.lock().unwrap().state;
-            (s.recent_offers.clone(), s.app_relays.clone())
-        };
-        let d = form::defaults(&recent, &self.locale_currency, &app_relays);
+        let recent = self.store.lock().unwrap().state.recent_offers.clone();
+        let d = form::defaults(&recent, &self.locale_currency);
         ui.set_create_relays(d.relays.join(", ").into());
         ui.set_create_side(d.side.into());
         ui.set_create_currency(d.currency.clone().into());

@@ -19,7 +19,7 @@ the only thing protecting you is your own judgement and their reputation.
 - [Getting started](getting-started/): installing the app and keeping your key safe.
 - [Taking an offer](taking-offers/): buying or selling from the offers in the market.
 - [Making an offer](making-offers/): posting your own offer and handling the people who answer it.
-- [Trading safely](safety/): reputation, who goes first, and the usual tricks.
+- [Trading safely](safety/): finding your first trustworthy people.
 - [Privacy](privacy/): what other people can and can't see.
 
 [Download the app](https://github.com/andunieee/bitcoin-small/releases/latest) for Android, Linux, macOS or

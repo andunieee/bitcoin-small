@@ -26,14 +26,25 @@ bitcoin small removes the middle entirely:
 
 ## The price of having no middleman
 
-Without escrow, the person who pays first can be cheated. That is the whole trade-off, and the app doesn't pretend
-otherwise. The answer is to keep each trade so small that losing it doesn't matter, and to let trust grow with the
-history you build.
+Without escrow, the person who pays first can be cheated. The app doesn't pretend otherwise. While you are looking
+for people to trade with, keep every trade so small that losing it doesn't matter, and be ready to lose a few dollars
+before you find the good ones. [Trading safely](../safety/) explains how to pick them.
+
+## What you get back
+
+Once you have a few people you trust, trading gets much easier than on any escrow platform:
+
+- **No rules to follow.** No escrow timers, no proof-of-payment uploads, no disputes to win.
+- **Nobody pulls the money back.** The person you trade with won't reverse a payment after receiving your bitcoin,
+  because they would lose you as a trading partner, and their reputation with the people who trust you.
+- **Any way of paying works.** Escrow platforms only accept payment methods they can check. Between people who trust
+  each other, anything goes: they can pay your electricity bill, buy something online for you, or you can do the same
+  for them, all in exchange for bitcoin.
 
 That makes bitcoin small a good fit for:
 
 - getting your first few dollars of bitcoin,
 - topping up or spending a small amount without involving a bank or an exchange,
-- regular small trades with people you have come to know.
+- regular trades with people you have come to know.
 
-It is not a good fit for moving large amounts at once, and it never will be.
+It is not a good fit for moving large amounts with strangers, and it never will be.

@@ -5,12 +5,40 @@ weight = 5
 nav = "safety"
 +++
 
-Nothing in the app can force anyone to pay. Here is how to keep it working anyway.
+When you start, you trust no one and no one trusts you. Expect to lose a few dollars along the way. Think of it as the
+price of finding the people you will keep trading with, and keep it small with the habits below.
 
-## Start tiny, grow slowly
+## Start tiny
 
 Your first trades with anyone should be amounts you wouldn't mind losing, like $2. If it goes well, the next one can
-be a little bigger. Someone who refuses to start small is telling you something.
+be a little bigger. With someone new, the person with the shorter or worse history goes first. When you are both new,
+split the trade: send half, receive half, then repeat. With lightning, small amounts settle in seconds, so taking
+turns costs nothing.
+
+## Look at offers from paid relays
+
+Publishing an offer means writing to a relay, and the relays the app uses by default are **paid**: each one charges a
+one-time fee before it accepts anything from a key. So everyone you see in the market already spent some money on
+their identity. Someone who cheats you and throws their key away has to pay again to come back.
+
+That is why you should keep paid relays in **Settings → Relays**. Adding free relays there lets in offers from keys
+that cost nothing to create.
+
+## Old accounts are costly accounts
+
+An account that has been trading for a long time isn't necessarily honest. But building that history took time, and
+nobody throws away years of good reports to keep $5. The older the history behind a key, the less it has to gain from
+cheating you.
+
+*Coming soon:* the app will show how far back someone's trades really go, with dates backed by
+[OpenTimestamps](https://opentimestamps.org) so nobody can fake an old history.
+
+## People you already know
+
+The best first peers are people you know from somewhere else: a friend, a meetup, an online community. Ask for their
+npub and trade with them first.
+
+*Coming soon:* asking people you know to vouch for someone from the app.
 
 ## Read the history
 
@@ -22,22 +50,6 @@ When you open someone's profile, you see:
 
 This is why reporting matters. Every trade you conclude makes your circle of trusted people bigger, and that circle
 is what you rely on later. Reports from strangers are ignored, so nobody can buy a good reputation with fake accounts.
-
-## Who goes first
-
-Whoever pays first takes the risk. As a rule:
-
-- the person with the **shorter or better history** with the other side should go first,
-- when both are new, **split the trade**: send half, receive half, then repeat,
-- with lightning, very small amounts settle in seconds, so taking turns is cheap.
-
-## Common tricks
-
-- **"I already paid", but no payment arrived.** Only trust your own bank or wallet app. Screenshots are easy to fake.
-- **Payments that can be reversed**, like card payments or some bank transfers. Prefer methods that are final, or
-  wait before sending the bitcoin.
-- **Moving to another chat app.** Keep the conversation in bitcoin small, so it stays with the trade.
-- **Pressure.** Hurry, sad stories and "just this once, a bigger amount" are all reasons to slow down.
 
 ## When it goes wrong
 

@@ -13,7 +13,7 @@ name = "bitcoin-small"
 path = "src/main.rs"
 
 [dependencies]
-ritualistic = { path = "../ritualistic", default-features = false, features = ["redb"] }
+ritualistic = { version = "0.2.3", default-features = false, features = ["redb"] }
 redb = "4.3"
 rkyv = "0.8.11"
 slint = "1.17"

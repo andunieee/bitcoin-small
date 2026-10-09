@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use ritualistic::{
-    Event, Filter, ID, Network, PubKey, SecretKey, SubscriptionOptions, TagQuery, Timestamp,
+    Event, Filter, ID, Network, PubKey, PublishOptions, SecretKey, SubscriptionOptions, TagQuery,
+    Timestamp,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
@@ -495,7 +496,11 @@ impl App {
     /// returns the relays that accepted it, and how many we tried
     async fn publish(&self, relays: Vec<String>, evt: Event) -> (Vec<String>, usize) {
         let total = relays.len();
-        let mut results = self.net.clone().publish_many(&relays, evt).await;
+        let mut results = self
+            .net
+            .clone()
+            .publish_many(&relays, evt, PublishOptions::default())
+            .await;
         let mut ok = vec![];
         while let Some(res) = results.recv().await {
             match res.error {

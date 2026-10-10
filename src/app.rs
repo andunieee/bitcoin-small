@@ -704,6 +704,7 @@ impl App {
             price_api: o.price_api.clone().into(),
             premium: prices::format_premium(o.premium).into(),
             price: price.into(),
+            amount: amount_range(o.amount_min, o.amount_max, &o.currency).into(),
             payments: if o.payment_methods.is_empty() {
                 "any payment method".to_string()
             } else {
@@ -783,6 +784,14 @@ impl App {
         ui.set_payment_more(checklist(&more, &checked));
         ui.set_create_other_payments(others.join(", ").into());
 
+        let (min, max) = match form::default_amount(&recent, currency) {
+            Some((min, max)) => (prices::format_amount(min), prices::format_amount(max)),
+            None => Default::default(),
+        };
+        ui.set_create_amount_linked(min == max);
+        ui.set_create_amount_min(min.into());
+        ui.set_create_amount_max(max.into());
+
         self.form_pair_changed(currency.into(), api.into());
     }
 
@@ -827,6 +836,18 @@ impl App {
             self.status("invalid premium, use something like +1% or -0.5%");
             return;
         };
+        let currency = ui.get_create_currency().to_string();
+        let (Some(amount_min), Some(amount_max)) = (
+            prices::parse_amount(&ui.get_create_amount_min()),
+            prices::parse_amount(&ui.get_create_amount_max()),
+        ) else {
+            self.status(format!("enter the minimum and maximum amount in {currency}"));
+            return;
+        };
+        if amount_min > amount_max {
+            self.status("the minimum amount can't be more than the maximum");
+            return;
+        }
         let bitcoin_methods = checked_names(&ui.get_bitcoin_options());
         if bitcoin_methods.is_empty() {
             self.status("pick at least one way to send bitcoin");
@@ -850,9 +871,10 @@ impl App {
 
         let template = OfferTemplate {
             side: ui.get_create_side().into(),
-            currency: ui.get_create_currency().into(),
+            currency: currency.clone(),
             price_api: ui.get_create_api().into(),
             premium,
+            amount: Some((amount_min, amount_max)),
             payment_methods: payment_methods.clone(),
             bitcoin_methods: bitcoin_methods.clone(),
             relays: relays.clone(),
@@ -863,9 +885,11 @@ impl App {
             } else {
                 Side::Sell
             },
-            currency: ui.get_create_currency().to_string(),
+            currency,
             price_api: ui.get_create_api().to_string(),
             premium,
+            amount_min,
+            amount_max,
             payment_methods,
             bitcoin_methods,
             relays: relays.clone(),
@@ -1133,10 +1157,11 @@ impl App {
             t.relays = offer.relays.clone();
             t.offer_id = Some(offer.id.to_hex());
             t.offer_summary = format!(
-                "maker {}s bitcoin for {} at market {} · {}",
+                "maker {}s bitcoin for {} at market {} · {} · {}",
                 offer.side.as_str(),
                 offer.currency,
                 prices::format_premium(offer.premium),
+                amount_range(offer.amount_min, offer.amount_max, &offer.currency),
                 offer.payment_methods.join(", ")
             );
             store.persist();
@@ -1789,11 +1814,36 @@ fn thousands(v: f64) -> String {
     if int < 0 { format!("-{out}") } else { out }
 }
 
+/// a fiat amount with thousands separators, and cents only when there are any
+fn fiat(v: f64) -> String {
+    let cents = (v * 100.0).round() as i64;
+    let int = thousands((cents / 100) as f64);
+    match cents % 100 {
+        0 => int,
+        c => format!("{int}.{c:02}"),
+    }
+}
+
+/// "20–100 USD", or "50 USD" for a fixed amount
+fn amount_range(min: f64, max: f64, currency: &str) -> String {
+    if fiat(min) == fiat(max) {
+        format!("{} {currency}", fiat(min))
+    } else {
+        format!("{}–{} {currency}", fiat(min), fiat(max))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
     fn thousands() {
         assert_eq!(super::thousands(1234567.4), "1,234,567");
         assert_eq!(super::thousands(999.0), "999");
+    }
+
+    #[test]
+    fn amount_range() {
+        assert_eq!(super::amount_range(20.0, 1500.5, "USD"), "20–1,500.50 USD");
+        assert_eq!(super::amount_range(50.0, 50.0, "BRL"), "50 BRL");
     }
 }

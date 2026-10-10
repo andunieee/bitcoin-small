@@ -136,6 +136,9 @@ pub struct Offer {
     pub price_api: String,
     /// percentage over (or under, if negative) the market price
     pub premium: f64,
+    /// how much fiat, in `currency`, the maker trades: anything from min to max
+    pub amount_min: f64,
+    pub amount_max: f64,
     pub payment_methods: Vec<String>,
     pub bitcoin_methods: Vec<String>,
     pub relays: Vec<String>,
@@ -147,6 +150,8 @@ pub struct NewOffer {
     pub currency: String,
     pub price_api: String,
     pub premium: f64,
+    pub amount_min: f64,
+    pub amount_max: f64,
     pub payment_methods: Vec<String>,
     pub bitcoin_methods: Vec<String>,
     pub relays: Vec<String>,
@@ -167,6 +172,11 @@ impl NewOffer {
                 crate::prices::format_premium(self.premium),
             ]);
         }
+        tags.push(vec![
+            "amount".into(),
+            crate::prices::format_amount(self.amount_min),
+            crate::prices::format_amount(self.amount_max),
+        ]);
         for pm in &self.payment_methods {
             tags.push(vec!["payment".into(), pm.clone()]);
         }
@@ -217,6 +227,16 @@ impl Offer {
         if relays.is_empty() {
             return None;
         }
+        let amount = evt.tags.find("amount")?;
+        let amount_min = crate::prices::parse_amount(&amount[1])?;
+        // a single value is a fixed amount
+        let amount_max = match amount.get(2) {
+            Some(max) => crate::prices::parse_amount(max)?,
+            None => amount_min,
+        };
+        if amount_min > amount_max {
+            return None;
+        }
 
         Some(Offer {
             id: evt.id,
@@ -227,6 +247,8 @@ impl Offer {
             currency: tag("currency")?.to_uppercase(),
             price_api: tag("price_api")?,
             premium: crate::prices::parse_premium(&tag("premium").unwrap_or_default())?,
+            amount_min,
+            amount_max,
             payment_methods: evt.tags.find_all("payment").map(|t| t[1].clone()).collect(),
             bitcoin_methods: evt.tags.find_all("bitcoin").map(|t| t[1].clone()).collect(),
             relays,
@@ -438,10 +460,12 @@ mod tests {
             currency: "usd".into(),
             price_api: "coingecko".into(),
             premium: 1.5,
+            amount_min: 20.0,
+            amount_max: 150.5,
             payment_methods: vec!["Strike".into(), "Zelle".into()],
             bitcoin_methods: vec!["lightning".into(), "liquid".into()],
             relays: vec!["wss://nostr.wine".into()],
-            description: "up to $20".into(),
+            description: "evenings only".into(),
         }
         .to_event(&sk);
         assert!(evt.verify_signature());
@@ -449,6 +473,7 @@ mod tests {
         let o = Offer::from_event(&evt).unwrap();
         assert_eq!(o.currency, "USD");
         assert_eq!(o.premium, 1.5);
+        assert_eq!((o.amount_min, o.amount_max), (20.0, 150.5));
         assert_eq!(o.payment_methods.len(), 2);
         assert_eq!(o.bitcoin_methods, vec!["lightning", "liquid"]);
         assert_eq!(o.relays, vec!["wss://nostr.wine/".to_string()]);

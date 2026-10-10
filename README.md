@@ -19,18 +19,19 @@ ongoing trades, since those belong to the current key. The replaced key is kept 
 
 ### Offers (kind `6012`)
 
-An offer is a regular event of kind `6012`. Its `content` is a free-form description, such as amounts, hours or
+An offer is a regular event of kind `6012`. Its `content` is a free-form description, such as hours or
 conditions. The terms go in tags:
 
 ```jsonc
 {
   "kind": 6012,
-  "content": "selling up to $20, I'm usually online in the evenings",
+  "content": "I'm usually online in the evenings",
   "tags": [
     ["side", "sell"],                  // the maker "sell"s or "buy"s bitcoin
     ["currency", "USD"],               // fiat currency to exchange for bitcoin
     ["price_api", "coingecko"],        // where the market price comes from
     ["premium", "+1%"],                // price relative to the market price, absent means "+0%"
+    ["amount", "20", "100"],           // min and max, in the fiat currency
     ["payment", "Strike"],             // payment methods, one tag each, free-form
     ["payment", "Zelle"],
     ["bitcoin", "lightning"],          // how the bitcoin side is settled, one tag each
@@ -50,6 +51,9 @@ conditions. The terms go in tags:
   show the offer with an "unknown price api" warning.
 - **`premium`**: the actual price is a variation over the market price. `"+1%"` means bitcoin is bought or sold 1% more
   expensive than the market price, and `"-2%"` means 2% cheaper. If the tag is absent, the premium is 0%.
+- **`amount`**: how much of the fiat currency the maker trades, anything from the min to the max. Both are positive
+  decimal numbers and min can't be more than max; equal values (or a single value) mean a fixed amount. Offers
+  without it are ignored.
 - **`payment`**: free-form. The app offers a hardcoded list similar to RoboSats (Revolut, Wise, Zelle, Strike, SEPA,
   PIX, Mercado Pago, M-Pesa, gift cards, Cash F2F, …) plus a text field for anything else.
 - **`bitcoin`**: how the maker accepts or sends bitcoin. The app offers `onchain`, `rootstock`, `lightning`, `cassis`,

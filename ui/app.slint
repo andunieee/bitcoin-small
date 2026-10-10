@@ -11,6 +11,8 @@ export struct OfferItem {
     price-api: string,
     premium: string,
     price: string,
+    // "20–100 USD", or "50 USD" when min and max are the same
+    amount: string,
     payments: string,
     bitcoin: string,
     relays: string,
@@ -246,6 +248,10 @@ export component AppWindow inherits Window {
     in-out property <string> create-currency;
     in-out property <string> create-api;
     in-out property <string> create-premium;
+    in-out property <string> create-amount-min;
+    in-out property <string> create-amount-max;
+    // max follows min until it is edited to something else
+    in-out property <bool> create-amount-linked: true;
     in-out property <string> create-other-payments;
     in-out property <string> create-relays;
     in-out property <string> create-description;
@@ -432,6 +438,11 @@ export component AppWindow inherits Window {
                                     }
 
                                     Text {
+                                        text: offer.amount;
+                                        font-size: 13px;
+                                    }
+
+                                    Text {
                                         text: offer.payments;
                                         wrap: word-wrap;
                                         font-size: 13px;
@@ -494,6 +505,11 @@ export component AppWindow inherits Window {
                                 Text {
                                     text: root.current-offer.price;
                                     font-weight: 700;
+                                }
+
+                                Text {
+                                    text: "amount: " + root.current-offer.amount;
+                                    wrap: word-wrap;
                                 }
 
                                 Text {
@@ -628,6 +644,44 @@ export component AppWindow inherits Window {
 
                         Muted {
                             text: root.create-preview;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "amount";
+                                vertical-alignment: center;
+                            }
+
+                            LineEdit {
+                                text <=> root.create-amount-min;
+                                placeholder-text: "min";
+                                input-type: InputType.decimal;
+                                edited => {
+                                    if root.create-amount-linked {
+                                        root.create-amount-max = self.text;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: "to";
+                                vertical-alignment: center;
+                            }
+
+                            LineEdit {
+                                text <=> root.create-amount-max;
+                                placeholder-text: "max";
+                                input-type: InputType.decimal;
+                                edited => {
+                                    root.create-amount-linked = self.text == root.create-amount-min;
+                                }
+                            }
+
+                            Text {
+                                text: root.create-currency;
+                                vertical-alignment: center;
+                            }
                         }
 
                         Muted {
@@ -816,7 +870,7 @@ export component AppWindow inherits Window {
                                     }
 
                                     Muted {
-                                        text: offer.payments + " · posted " + offer.age;
+                                        text: offer.amount + " · " + offer.payments + " · posted " + offer.age;
                                     }
                                 }
 

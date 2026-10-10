@@ -25,14 +25,15 @@ and the app tells you how many relays took it ("offer published to 2/7 relays").
 - **I want to sell / buy bitcoin for** a currency.
 - **premium**: how far from the market price you trade. `+2%` means whoever buys from you pays 2% above market. Leave it
   empty to trade at the market price.
+- **amount**: how much of your currency you want to trade, from a minimum to a maximum. The maximum copies the
+  minimum as you type, for a fixed amount; change it to accept a range.
 - **bitcoin sent via**: how you can send or receive the bitcoin. Pick at least one.
 - **fiat payment methods**: how the money moves. Methods common for your currency are shown first, and you can type
   others.
 - **relays for the negotiation** (under "custom price source, relays and description"): where people reach you about
   this offer. These don't have to be the paid relays: by default they are free ones, like relay.primal.net and
   nos.lol.
-- **description** (in the same section): amounts, hours, anything else people should know. "Up to $10, evenings only"
-  is a good start.
+- **description** (in the same section): hours, anything else people should know. "Evenings only" is a good start.
 
 The form remembers what you picked in your last few offers, so the next offer is usually one tap away.
 

@@ -26,6 +26,9 @@ pub struct OfferTemplate {
     pub currency: String,
     pub price_api: String,
     pub premium: f64,
+    /// (min, max), absent in offers from before amounts existed
+    #[serde(default)]
+    pub amount: Option<(f64, f64)>,
     pub payment_methods: Vec<String>,
     pub bitcoin_methods: Vec<String>,
     #[serde(default)]
@@ -111,6 +114,14 @@ pub fn default_api(recent: &[OfferTemplate], currency: &str) -> &'static str {
     .or(apis.first())
     .map(|a| a.id())
     .unwrap_or("")
+}
+
+/// the amount of our last offer in this currency. amounts don't carry over between currencies
+pub fn default_amount(recent: &[OfferTemplate], currency: &str) -> Option<(f64, f64)> {
+    recent
+        .iter()
+        .filter(|t| t.currency == currency)
+        .find_map(|t| t.amount)
 }
 
 /// payment methods we used in most of our recent offers in this currency. for a currency we never
@@ -249,6 +260,7 @@ mod tests {
             currency: currency.into(),
             price_api: "yadio".into(),
             premium,
+            amount: None,
             payment_methods: payments.iter().map(|s| s.to_string()).collect(),
             bitcoin_methods: bitcoin.iter().map(|s| s.to_string()).collect(),
             relays: relays.iter().map(|s| s.to_string()).collect(),
@@ -266,6 +278,7 @@ mod tests {
         assert_eq!(default_api(&[], "USD"), "coingecko");
         assert_eq!(default_api(&[], "VES"), "yadio");
         assert!(default_payment_methods(&[], "USD").is_empty());
+        assert_eq!(default_amount(&[], "USD"), None);
     }
 
     #[test]
@@ -285,6 +298,18 @@ mod tests {
         );
         assert_eq!(default_payment_methods(&recent, "USD"), vec!["Zelle"]);
         assert_eq!(default_api(&recent, "BRL"), "yadio");
+    }
+
+    #[test]
+    fn amount_from_the_same_currency() {
+        let mut usd = tpl("USD", 0.0, &[], &[]);
+        usd.amount = Some((20.0, 100.0));
+        let mut brl = tpl("BRL", 0.0, &[], &[]);
+        brl.amount = Some((50.0, 50.0));
+        let recent = vec![tpl("USD", 0.0, &[], &[]), usd, brl];
+        assert_eq!(default_amount(&recent, "USD"), Some((20.0, 100.0)));
+        assert_eq!(default_amount(&recent, "BRL"), Some((50.0, 50.0)));
+        assert_eq!(default_amount(&recent, "EUR"), None);
     }
 
     #[test]

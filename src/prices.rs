@@ -177,6 +177,19 @@ pub fn apply_premium(market: f64, pct: f64) -> f64 {
     market * (1.0 + pct / 100.0)
 }
 
+/// parse a fiat amount like "20" or "150.50"; it has to be more than zero
+pub fn parse_amount(s: &str) -> Option<f64> {
+    s.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite() && *v > 0.0)
+}
+
+/// canonical form of an amount for the offer tag
+pub fn format_amount(v: f64) -> String {
+    v.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +203,16 @@ mod tests {
         assert_eq!(format_premium(1.0), "+1%");
         assert_eq!(format_premium(-2.5), "-2.5%");
         assert_eq!(apply_premium(100.0, 1.0), 101.0);
+    }
+
+    #[test]
+    fn amount() {
+        assert_eq!(parse_amount(" 20 "), Some(20.0));
+        assert_eq!(parse_amount("150.5"), Some(150.5));
+        assert_eq!(parse_amount("0"), None);
+        assert_eq!(parse_amount("-5"), None);
+        assert_eq!(parse_amount(""), None);
+        assert_eq!(format_amount(20.0), "20");
+        assert_eq!(format_amount(150.5), "150.5");
     }
 }

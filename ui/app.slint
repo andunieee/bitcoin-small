@@ -607,6 +607,7 @@ export component AppWindow inherits Window {
                             }
 
                             ComboBox {
+                                width: 80px;
                                 model: ["sell", "buy"];
                                 current-value <=> root.create-side;
                             }
@@ -617,6 +618,7 @@ export component AppWindow inherits Window {
                             }
 
                             ComboBox {
+                                width: 90px;
                                 model: root.create-currencies;
                                 current-value <=> root.create-currency;
                                 selected(c) => {
@@ -633,6 +635,7 @@ export component AppWindow inherits Window {
                             }
 
                             LineEdit {
+                                width: 80px;
                                 text <=> root.create-premium;
                                 placeholder-text: "+1%";
                                 input-type: InputType.text;
@@ -640,6 +643,10 @@ export component AppWindow inherits Window {
                                     root.create-premium-changed();
                                 }
                             }
+                        }
+
+                        Muted {
+                            text: "\"+1%\" means bitcoin goes 1% more expensive than the market price; empty means 0%.";
                         }
 
                         Muted {
@@ -654,6 +661,7 @@ export component AppWindow inherits Window {
                             }
 
                             LineEdit {
+                                width: 80px;
                                 text <=> root.create-amount-min;
                                 placeholder-text: "min";
                                 input-type: InputType.decimal;
@@ -670,6 +678,7 @@ export component AppWindow inherits Window {
                             }
 
                             LineEdit {
+                                width: 80px;
                                 text <=> root.create-amount-max;
                                 placeholder-text: "max";
                                 input-type: InputType.decimal;
@@ -685,7 +694,7 @@ export component AppWindow inherits Window {
                         }
 
                         Muted {
-                            text: "\"+1%\" means bitcoin goes 1% more expensive than the market price; empty means 0%.";
+                            text: "setting min and max to the same value makes it an exact amount offer.";
                         }
 
                         Text {

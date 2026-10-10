@@ -1,5 +1,5 @@
-base_url = "https://andunieee.github.io/bitcoin-small"
-title = "bitcoin small"
+base_url = "https://andunieee.github.io/bitcoin-smol"
+title = "bitcoin-smol"
 description = "a tiny peer-to-peer market for bitcoin and fiat, based on trust alone"
 compile_sass = false
 build_search_index = false
@@ -8,4 +8,4 @@ build_search_index = false
 smart_punctuation = true
 
 [extra]
-repo = "https://github.com/andunieee/bitcoin-small"
+repo = "https://github.com/andunieee/bitcoin-smol"

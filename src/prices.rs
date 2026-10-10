@@ -93,7 +93,7 @@ async fn get_json(url: &str) -> Result<serde_json::Value, String> {
         // browsers set the user agent themselves
         #[cfg(not(target_arch = "wasm32"))]
         let client = reqwest::Client::builder()
-            .user_agent("bitcoin-small")
+            .user_agent("bitcoin-smol")
             .build();
         #[cfg(target_arch = "wasm32")]
         let client = reqwest::Client::builder().build();

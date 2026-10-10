@@ -1,5 +1,5 @@
 [package]
-name = "bitcoin-small"
+name = "bitcoin-smol"
 version = "0.1.0"
 edition = "2024"
 description = "trust-based p2p bitcoin/fiat market over nostr"
@@ -9,7 +9,7 @@ license = "MIT"
 crate-type = ["cdylib", "lib"]
 
 [[bin]]
-name = "bitcoin-small"
+name = "bitcoin-smol"
 path = "src/main.rs"
 
 [dependencies]
@@ -50,7 +50,7 @@ slint-build = "1.17"
 
 [package.metadata.android]
 package = "cash.small.bitcoin"
-apk_name = "bitcoin-small"
+apk_name = "bitcoin-smol"
 build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
 
 [package.metadata.android.sdk]
@@ -61,4 +61,4 @@ target_sdk_version = 34
 name = "android.permission.INTERNET"
 
 [package.metadata.android.application]
-label = "bitcoin small"
+label = "bitcoin smol"

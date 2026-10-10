@@ -14,7 +14,7 @@ Peer-to-peer markets solve part of that, but most of them still have a company o
 that holds the coins in escrow, settles disputes and keeps a database of users. That middle part is what makes them
 heavy, and it is also what can be shut down.
 
-bitcoin small removes the middle entirely:
+bitcoin-smol removes the middle entirely:
 
 - **No sign-up.** The app creates a key for you on first launch. That key is your identity. There is no username,
   email or phone number.
@@ -46,7 +46,7 @@ scammer their reputation like any other.
 And any way of paying works. Between people who trust each other, one can pay the other's electricity bill or buy
 something online for them, in exchange for bitcoin.
 
-That makes bitcoin small a good fit for:
+That makes bitcoin-smol a good fit for:
 
 - getting your first few dollars of bitcoin,
 - topping up or spending without involving a bank or an exchange,

@@ -35,15 +35,15 @@ jobs:
       - name: linux dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev
-      - run: cargo build --release --locked --bin bitcoin-small --target ${{ matrix.target }}
+      - run: cargo build --release --locked --bin bitcoin-smol --target ${{ matrix.target }}
       - name: package
         shell: bash
         run: |
           ext=""
           [ "$RUNNER_OS" = Windows ] && ext=".exe"
           mkdir dist
-          cp "target/${{ matrix.target }}/release/bitcoin-small$ext" \
-             "dist/bitcoin-small-${GITHUB_REF_NAME}-${{ matrix.target }}$ext"
+          cp "target/${{ matrix.target }}/release/bitcoin-smol$ext" \
+             "dist/bitcoin-smol-${GITHUB_REF_NAME}-${{ matrix.target }}$ext"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -75,7 +75,7 @@ jobs:
             echo "::warning::no ANDROID_KEYSTORE_BASE64 secret, signing with a throwaway key"
             password="throwaway"
             keytool -genkeypair -keystore "$ks" -storepass "$password" -alias release \
-              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=bitcoin small"
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=bitcoin smol"
           fi
           echo "CARGO_APK_RELEASE_KEYSTORE=$ks" >> "$GITHUB_ENV"
           echo "::add-mask::$password"
@@ -85,7 +85,7 @@ jobs:
           export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
           cargo apk build --lib --release
           mkdir dist
-          cp target/release/apk/bitcoin-small.apk "dist/bitcoin-small-${GITHUB_REF_NAME}.apk"
+          cp target/release/apk/bitcoin-smol.apk "dist/bitcoin-smol-${GITHUB_REF_NAME}.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: android

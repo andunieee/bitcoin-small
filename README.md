@@ -1,11 +1,11 @@
-# bitcoin small
+# bitcoin-smol
 
 A tiny peer-to-peer market for exchanging bitcoin and fiat over nostr.
 
 There is **no escrow, no arbiter, no usernames and no server**. Every trade is based on trust alone. Start with
 ridiculously small amounts, like $2. Build a history of trades, increase the amounts slowly, and never go too high.
 
-The user guide lives in `docs/` and is published to <https://andunieee.github.io/bitcoin-small/> on every push to
+The user guide lives in `docs/` and is published to <https://andunieee.github.io/bitcoin-smol/> on every push to
 `master` (`zola --root docs serve` to preview it). This README is about the protocol and the code.
 
 ## How it works
@@ -154,7 +154,7 @@ Everything is in the app's data directory:
 - `history.redb`: past trades, concluded or archived, in [redb](https://www.redb.org).
 - `events.redb`: trade reports, yours and other people's.
 
-In the browser, `key` and `state.json` go to localStorage under `bitcoin-small/`, and the two redb databases to the
+In the browser, `key` and `state.json` go to localStorage under `bitcoin-smol/`, and the two redb databases to the
 origin private file system, through `ritualistic::OpfsBackend`. They are held in memory and saved in the background
 after each commit, so closing the tab right after a change can lose it.
 
@@ -204,7 +204,7 @@ with a newcomer.
 On the desktop, for development:
 
 ```sh
-cargo run                 # data goes in ~/.local/share/bitcoin-small (%APPDATA% on windows), or set $BITCOIN_SMALL_DATA
+cargo run                 # data goes in ~/.local/share/bitcoin-smol (%APPDATA% on windows), or set $BITCOIN_SMOL_DATA
 cargo test
 ```
 
@@ -229,7 +229,7 @@ trunk build web/index.html --release --dist target/web       # a static site, to
 ```
 
 The databases need the origin private file system, which browsers only give to pages served over https or from
-localhost. `.github/workflows/pages.yml` publishes the web build at <https://andunieee.github.io/bitcoin-small/app/>,
+localhost. `.github/workflows/pages.yml` publishes the web build at <https://andunieee.github.io/bitcoin-smol/app/>,
 next to the user guide.
 
 ### Releases

@@ -64,7 +64,7 @@ impl LocalStorage {
     }
 
     fn key(name: &str) -> String {
-        format!("bitcoin-small/{name}")
+        format!("bitcoin-smol/{name}")
     }
 }
 

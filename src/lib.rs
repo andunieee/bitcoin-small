@@ -15,7 +15,7 @@ fn android_main(android_app: slint::android::AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
-            .with_tag("bitcoin-small"),
+            .with_tag("bitcoin-smol"),
     );
 
     // the websocket tls stack looks for the system's ca certificates through this

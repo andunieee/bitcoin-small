@@ -30,7 +30,7 @@ const TRADE_START_SLACK: u32 = 5 * 60;
 const PAST_TRADES_SHOWN: usize = 30;
 
 /// the user guide, built from docs/ by .github/workflows/pages.yml
-const DOCS_URL: &str = "https://andunieee.github.io/bitcoin-small/";
+const DOCS_URL: &str = "https://andunieee.github.io/bitcoin-smol/";
 
 /// a live subscription, one task per relay so each one reconnects on its own. dropping it stops it.
 struct LiveSub(Vec<tokio::task::AbortHandle>);

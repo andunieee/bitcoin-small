@@ -7,7 +7,7 @@ nav = "start"
 
 ## Install
 
-Download the latest version from the [releases page](https://github.com/andunieee/bitcoin-small/releases/latest):
+Download the latest version from the [releases page](https://github.com/andunieee/bitcoin-smol/releases/latest):
 
 - **Android**: the `.apk` file. Your phone will ask you to allow installing apps from your browser or file manager.
 - **Linux, macOS, Windows**: the file for your system. On macOS and Linux you may need to mark it as executable

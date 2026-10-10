@@ -1,7 +1,7 @@
 # build a debug apk and install it on the connected device, without launching it
 installDebug:
     cargo apk build --lib
-    adb install -r target/debug/apk/bitcoin-small.apk
+    adb install -r target/debug/apk/bitcoin-smol.apk
 
 # run the desktop app
 desktop:

@@ -4,7 +4,7 @@ sort_by = "weight"
 
 # Swap bitcoin and local money with people you come to trust
 
-**bitcoin small** is a tiny market where people post offers to buy or sell bitcoin for their local money, then
+**bitcoin-smol** is a tiny market where people post offers to buy or sell bitcoin for their local money, then
 settle the trade between themselves, over GCash, a bank transfer, Revolut, cash or whatever they agree on.
 
 There are no accounts, no company in the middle, no escrow and no one to complain to. You trade with a person, and
@@ -22,5 +22,5 @@ the only thing protecting you is your own judgement and their reputation.
 - [Trading safely](safety/): finding your first trustworthy people.
 - [Privacy](privacy/): what other people can and can't see.
 
-[Download the app](https://github.com/andunieee/bitcoin-small/releases/latest) for Android, Linux, macOS or
+[Download the app](https://github.com/andunieee/bitcoin-smol/releases/latest) for Android, Linux, macOS or
 Windows.

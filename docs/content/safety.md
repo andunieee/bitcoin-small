@@ -8,55 +8,48 @@ nav = "safety"
 When you start, you trust no one and no one trusts you. Expect to lose a few dollars along the way. Think of it as the
 price of finding the people you will keep trading with, and keep it small with the habits below.
 
-## Start tiny
+## Start small, then grow
 
-Your first trades with anyone should be amounts you wouldn't mind losing, like $2. If it goes well, the next one can
-be a little bigger. With someone new, the person with the shorter or worse history goes first. When you are both new,
-split the trade: send half, receive half, then repeat. With lightning, small amounts settle in seconds, so taking
-turns costs nothing.
+How much to risk on a trade depends on what you and the people you trust know about the other person:
 
-## Look at offers from paid relays
+- **Nobody you know has traded with them**: start with something like $2, an amount you wouldn't mind losing.
+- **People you trust have good trades with them**: you can start higher, like $20 or $100.
+- **You have a long history of good trades together**: after years of that, you can raise your limits a lot.
 
-Publishing an offer means writing to a relay, and the relays the app uses by default are **paid**: each one charges a
-one-time fee before it accepts anything from a key. So everyone you see in the market already spent some money on
-their identity. Someone who cheats you and throws their key away has to pay again to come back.
+Where to stop is always your call.
 
-That is why you should keep paid relays in **Settings → Relays**. Adding free relays there lets in offers from keys
-that cost nothing to create.
+## Why identities should cost something
 
-## Old accounts are costly accounts
+If making a new identity is free, a scammer can take $20 from a few people, and once some of them report it, throw
+the key away and start over with a clean one. A good history only means something if starting over has a cost.
 
-An account that has been trading for a long time isn't necessarily honest. But building that history took time, and
-nobody throws away years of good reports to keep $5. The older the history behind a key, the less it has to gain from
-cheating you.
-
-*Coming soon:* the app will show how far back someone's trades really go, with dates backed by
-[OpenTimestamps](https://opentimestamps.org) so nobody can fake an old history.
+Paid relays are one way to add that cost: they only accept posts from keys that paid them a fee, and a high one-time
+fee makes throwing a key away expensive. Offers you see on such relays come from keys that paid it. Free relays let
+in offers from keys that cost nothing to create, so weigh a history there accordingly.
 
 ## People you already know
 
 The best first peers are people you know from somewhere else: a friend, a meetup, an online community. Ask for their
 npub and trade with them first.
 
-*Coming soon:* asking people you know to vouch for someone from the app.
-
 ## Read the history
 
 When you open someone's profile, you see:
 
 1. **Your own history with them**: every report you wrote about them.
-2. **What the people you trust say**: reports about them written by the people you had the most successful trades
-   with.
+2. **What the people you trust say**: if you have fewer than 20 reports of your own about them, the app asks the 10
+   people you have reported the most successful trades with, and shows what they wrote about this person.
 
-This is why reporting matters. Every trade you conclude makes your circle of trusted people bigger, and that circle
-is what you rely on later. Reports from strangers are ignored, so nobody can buy a good reputation with fake accounts.
+This is why reporting matters. Every successful trade you conclude can bring someone into the circle the app asks
+later. Reports from people outside that circle are never shown, so fake accounts praising each other don't count for
+you.
 
 ## When it goes wrong
 
 Conclude the trade as a **failure** with a short comment. It warns the people who trust you. Then use **Block** on the
-person's profile, and you won't hear from them again.
+person's profile: you won't see their offers or hear from them again.
 
 ## Labels
 
-Give people a label from their profile, like "fast PIX, met at the meetup". Only you see labels. The **People** tab
+Give people a label from their profile, like "fast GCash, met at the meetup". Only you see labels. The **People** tab
 lists everyone you labeled.

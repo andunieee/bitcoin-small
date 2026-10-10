@@ -5,9 +5,10 @@ weight = 1
 nav = "why"
 +++
 
-Getting a little bitcoin, or turning a little bitcoin back into money you can spend, usually means an exchange. An
-exchange wants your ID, your address and your bank details. It can freeze your account, it can be hacked, and it
-reports what you do.
+For bitcoin to become the money people use everywhere, people everywhere need a way to move between it and the money
+they are paid in and pay their bills with: pesos in the Philippines, naira in Nigeria, dollars, euros. Today that
+usually means an exchange, and an exchange wants your ID, your address and your bank details. It can freeze your
+account, it may not serve your country at all, and it reports what you do.
 
 Peer-to-peer markets solve part of that, but most of them still have a company or a server in the middle: something
 that holds the coins in escrow, settles disputes and keeps a database of users. That middle part is what makes them
@@ -19,9 +20,8 @@ bitcoin small removes the middle entirely:
   email or phone number.
 - **No server.** Offers and messages travel over [nostr](https://nostr.com) relays, which are simple, replaceable
   message boards. You can switch relays whenever you want.
-- **No escrow.** Nobody holds the coins during a trade. You and the other person agree on who pays first, and they
-  pay.
-- **No global score.** Instead of a star rating anyone can fake, you see what *you* and the people *you* traded well
+- **No escrow.** Nobody holds the coins during a trade. You and the other person agree on how to do it.
+- **No global score.** Instead of a rating anyone can inflate, you see what *you* and the people *you* traded well
   with have said about someone.
 
 ## The price of having no middleman
@@ -32,19 +32,22 @@ before you find the good ones. [Trading safely](../safety/) explains how to pick
 
 ## What you get back
 
-Once you have a few people you trust, trading gets much easier than on any escrow platform:
+On an escrow platform, every trade is a trade with a possible scammer. Both sides stay wary, follow strict timeouts,
+use only the payment methods the platform accepts, keep receipts, and call in the platform's moderators when
+something goes wrong.
 
-- **No rules to follow.** No escrow timers, no proof-of-payment uploads, no disputes to win.
-- **Nobody pulls the money back.** The person you trade with won't reverse a payment after receiving your bitcoin,
-  because they would lose you as a trading partner, and their reputation with the people who trust you.
-- **Any way of paying works.** Escrow platforms only accept payment methods they can check. Between people who trust
-  each other, anything goes: they can pay your electricity bill, buy something online for you, or you can do the same
-  for them, all in exchange for bitcoin.
+Once you trust someone, or someone you trust vouches for them with their reports, none of that is needed. Trades just
+flow: you agree on the terms in a chat and do them.
+
+Some frauds also get around escrow, like chargebacks or triangulation fraud, where a scammer has a third person pay
+you with money that is later pulled back. Here they are just another way of cheating someone, and they cost the
+scammer their reputation like any other.
+
+And any way of paying works. Between people who trust each other, one can pay the other's electricity bill or buy
+something online for them, in exchange for bitcoin.
 
 That makes bitcoin small a good fit for:
 
 - getting your first few dollars of bitcoin,
-- topping up or spending a small amount without involving a bank or an exchange,
+- topping up or spending without involving a bank or an exchange,
 - regular trades with people you have come to know.
-
-It is not a good fit for moving large amounts with strangers, and it never will be.

@@ -7,18 +7,16 @@ nav = "make"
 
 Use the **New offer** tab when you want people to come to you.
 
-## Before your first offer: pay the relays
+## Where your offer goes
 
-Offers are published to the relays in **Settings → Relays**, and by default those are paid relays. They won't accept
-your offer until your key has paid their one-time fee. This small fee is what makes identities cost something, and it
-is the reason people take offers from paid relays more seriously (see [Trading safely](../safety/)).
+Offers are published to the relays in **Settings → Relays**. A paid relay rejects your offer until your key has paid
+its fee. That fee is what makes an identity cost something, and why people may take offers from paid relays more
+seriously (see [Trading safely](../safety/)).
 
-1. Copy your npub from **Settings → Your key**.
-2. Open the website of each relay you want to use, like [nostr.wine](https://nostr.wine) or
-   [nostr.land](https://nostr.land), and pay for that npub.
+To use a paid relay, copy your npub from **Settings → Your key**, open the relay's website and pay for that npub.
 
-You only do this once per key. One relay is enough to start. The relays you didn't pay for simply reject the offer,
-and the app tells you how many relays took it ("offer published to 2/7 relays").
+After publishing, the app tells you how many relays took the offer, for example "offer published to 2/7 relays".
+One is enough, as long as the people you want to reach read from it.
 
 ## The form
 
@@ -31,8 +29,7 @@ and the app tells you how many relays took it ("offer published to 2/7 relays").
 - **fiat payment methods**: how the money moves. Methods common for your currency are shown first, and you can type
   others.
 - **relays for the negotiation** (under "custom price source, relays and description"): where people reach you about
-  this offer. These don't have to be the paid relays: by default they are free ones, like relay.primal.net and
-  nos.lol.
+  this offer. They can be different from the relays the offer is published to.
 - **description** (in the same section): hours, anything else people should know. "Evenings only" is a good start.
 
 The form remembers what you picked in your last few offers, so the next offer is usually one tap away.
@@ -47,5 +44,5 @@ exactly as you would when [taking an offer](../taking-offers/). You don't have t
 
 ## Your offer is public
 
-Anyone can see your offer and your npub. They can't see your chats, or who you trade with. See
-[Privacy](../privacy/).
+Anyone can see your offer and your npub. They can't read your chats. See [Privacy](../privacy/) for what else is
+visible.

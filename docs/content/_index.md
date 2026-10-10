@@ -2,16 +2,16 @@
 sort_by = "weight"
 +++
 
-# Swap bitcoin and cash with people, a few dollars at a time
+# Swap bitcoin and local money with people you come to trust
 
 **bitcoin small** is a tiny market where people post offers to buy or sell bitcoin for their local money, then
-settle the trade between themselves, over PIX, Zelle, Revolut, cash or whatever they agree on.
+settle the trade between themselves, over GCash, a bank transfer, Revolut, cash or whatever they agree on.
 
 There are no accounts, no company in the middle, no escrow and no one to complain to. You trade with a person, and
 the only thing protecting you is your own judgement and their reputation.
 
-> **The one rule:** start with ridiculously small amounts, like $2. Build a history of good trades, raise the
-> amounts slowly, and never go too high.
+> **Start small.** With someone nobody you know has traded with, start with something like $2. Build a history of
+> good trades and raise the amounts as trust grows.
 
 ## Where to go next
 

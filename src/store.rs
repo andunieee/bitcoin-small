@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use ritualistic::database::EventDatabase;
 use ritualistic::{Event, Filter, PubKey, RedbEventDatabase, SecretKey, TagQuery};
 
+use crate::deal::OfferTerms;
 use crate::form::OfferTemplate;
 use crate::history::History;
 use crate::protocol::{KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS};
@@ -100,6 +101,9 @@ pub struct Message {
     pub created_at: u32,
     pub mine: bool,
     pub text: String,
+    /// the `["trade", …]` tag of a structured message, see `deal.rs`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<Vec<String>>,
 }
 
 /// an ongoing trade with someone: one per peer, as the conversation key is per pair of keys
@@ -110,6 +114,9 @@ pub struct Trade {
     pub offer_summary: String,
     #[serde(default)]
     pub offer_id: Option<String>,
+    /// the terms of that offer. the maker learns which offer it is from the taker's messages.
+    #[serde(default)]
+    pub offer: Option<OfferTerms>,
     /// messages from before this are left out, they belong to an earlier trade with the same peer
     #[serde(default)]
     pub started_at: u32,

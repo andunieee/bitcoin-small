@@ -1,4 +1,5 @@
 mod app;
+pub mod deal;
 pub mod form;
 pub mod history;
 pub mod prices;

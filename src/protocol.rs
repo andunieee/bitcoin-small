@@ -108,7 +108,8 @@ pub fn payment_methods_for(currency: &str) -> (Vec<&'static str>, Vec<&'static s
     (common, rest)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Side {
     /// the maker is selling bitcoin for fiat
     Sell,
@@ -281,12 +282,20 @@ impl Conversation {
     }
 
     /// wrap a message in a kind:14 rumor, encrypt it and sign the wrapper with the conversation key.
+    /// `extra` is one more tag for the rumor, like the action of a structured trade message.
     /// returns the rumor id (to be remembered as "mine") and the event to publish.
-    pub fn wrap(&self, me: &PubKey, text: &str, offer: Option<ID>) -> (Rumor, Event) {
+    pub fn wrap(
+        &self,
+        me: &PubKey,
+        text: &str,
+        offer: Option<ID>,
+        extra: Option<Vec<String>>,
+    ) -> (Rumor, Event) {
         let mut tags = vec![vec!["p".to_string(), self.peer.to_hex()]];
         if let Some(offer) = offer {
             tags.push(vec!["e".into(), offer.to_hex()]);
         }
+        tags.extend(extra);
         let mut rumor = Rumor {
             id: String::new(),
             pubkey: me.to_hex(),
@@ -438,7 +447,7 @@ mod tests {
         let cb = Conversation::new(&b, a.pubkey());
         assert_eq!(ca.pubkey(), cb.pubkey());
 
-        let (rumor, evt) = ca.wrap(&a.pubkey(), "hello", None);
+        let (rumor, evt) = ca.wrap(&a.pubkey(), "hello", None, None);
         assert_eq!(evt.pubkey, ca.pubkey());
         assert!(evt.tags.0.iter().any(|t| t == &vec!["-".to_string()]));
         let exp: u32 = evt.tags.find("expiration").unwrap()[1].parse().unwrap();

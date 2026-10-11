@@ -42,6 +42,35 @@ export struct TradeView {
     started: string,
 }
 
+export struct DealRow {
+    label: string,
+    value: string,
+}
+
+// the structured state of a trade that came from an offer, and which of its forms are ours to fill
+export struct DealView {
+    // false for chats that aren't about an offer
+    active: bool,
+    role: string,
+    next-step: string,
+    my-turn: bool,
+    concluded: bool,
+    rows: [DealRow],
+    pick-amount: bool,
+    amount-hint: string,
+    // to show the amount being typed in sats, zero while the price is unknown
+    sats-per-unit: float,
+    // non-empty when we have to pick one
+    bitcoin-choices: [string],
+    payment-choices: [string],
+    give-details: bool,
+    details-label: string,
+    details-hint: string,
+    can-send: bool,
+    send-hint: string,
+    send-label: string,
+}
+
 export struct MsgItem {
     mine: bool,
     text: string,
@@ -161,6 +190,208 @@ component Label inherits Rectangle {
     }
 }
 
+component Choices inherits Card {
+    in property <string> title;
+    in property <[string]> options;
+    callback picked(string);
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+        Text {
+            text: root.title;
+            font-weight: 700;
+            wrap: word-wrap;
+        }
+
+        for option in root.options: Button {
+            text: option;
+            clicked => {
+                root.picked(option);
+            }
+        }
+    }
+}
+
+// where a trade stands and the forms that move it forward. picking something sends a message.
+component DealPanel inherits VerticalLayout {
+    in property <DealView> deal;
+    // "details" or "sent" while asking to confirm those
+    in-out property <string> confirming;
+    in-out property <string> draft;
+    callback pick-amount(string);
+    callback pick-bitcoin(string);
+    callback pick-payment(string);
+    callback give-details(string);
+    callback mark-sent();
+    spacing: 8px;
+    alignment: start;
+
+    Text {
+        text: root.deal.next-step;
+        color: root.deal.my-turn || root.deal.concluded ? #f7931a : Palette.foreground;
+        font-weight: 700;
+        wrap: word-wrap;
+    }
+
+    Muted {
+        text: root.deal.role;
+    }
+
+    Card {
+        VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            for row in root.deal.rows: VerticalLayout {
+                Muted {
+                    text: row.label;
+                }
+
+                Text {
+                    text: row.value;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+
+    if root.deal.pick-amount: Card {
+        VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            Text {
+                text: "How much?";
+                font-weight: 700;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                amount := LineEdit {
+                    placeholder-text: root.deal.amount-hint;
+                    input-type: InputType.decimal;
+                    accepted => {
+                        root.pick-amount(self.text);
+                    }
+                }
+
+                Button {
+                    text: "Pick";
+                    enabled: amount.text != "";
+                    clicked => {
+                        root.pick-amount(amount.text);
+                    }
+                }
+            }
+
+            if root.deal.sats-per-unit > 0 && amount.text.is-float(): Muted {
+                text: "≈ " + Math.round(amount.text.to-float() * root.deal.sats-per-unit) + " sats at the current price";
+            }
+        }
+    }
+    if root.deal.bitcoin-choices.length > 0: Choices {
+        title: "How is the bitcoin sent?";
+        options: root.deal.bitcoin-choices;
+        picked(m) => {
+            root.pick-bitcoin(m);
+        }
+    }
+    if root.deal.payment-choices.length > 0: Choices {
+        title: "How is the fiat sent?";
+        options: root.deal.payment-choices;
+        picked(m) => {
+            root.pick-payment(m);
+        }
+    }
+    if root.deal.give-details: Card {
+        VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            Text {
+                text: root.deal.details-label;
+                font-weight: 700;
+                wrap: word-wrap;
+            }
+
+            Muted {
+                text: root.deal.details-hint;
+            }
+
+            TextEdit {
+                text <=> root.draft;
+                min-height: 80px;
+                wrap: word-wrap;
+                read-only: root.confirming == "details";
+            }
+
+            if root.confirming != "details": Button {
+                text: "Send…";
+                enabled: root.draft != "";
+                clicked => {
+                    root.confirming = "details";
+                }
+            }
+            if root.confirming == "details": Tip {
+                text: "Check every character. If these details are wrong, what they send can go to someone else and be lost for good.";
+            }
+            if root.confirming == "details": HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "Confirm and send";
+                    primary: true;
+                    clicked => {
+                        root.give-details(root.draft);
+                    }
+                }
+
+                Button {
+                    text: "Edit";
+                    clicked => {
+                        root.confirming = "";
+                    }
+                }
+            }
+        }
+    }
+    if root.deal.can-send: Card {
+        VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            Text {
+                text: root.deal.send-hint;
+                wrap: word-wrap;
+            }
+
+            if root.confirming != "sent": Button {
+                text: root.deal.send-label;
+                primary: true;
+                clicked => {
+                    root.confirming = "sent";
+                }
+            }
+            if root.confirming == "sent": Tip {
+                text: "Only confirm once it has actually left your account or wallet. They will rely on it.";
+            }
+            if root.confirming == "sent": HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "Yes, it's sent";
+                    primary: true;
+                    clicked => {
+                        root.mark-sent();
+                    }
+                }
+
+                Button {
+                    text: "Cancel";
+                    clicked => {
+                        root.confirming = "";
+                    }
+                }
+            }
+        }
+    }
+}
+
 component TradeCard inherits Rectangle {
     in property <TradeItem> item;
     callback clicked;
@@ -271,12 +502,20 @@ export component AppWindow inherits Window {
     in property <[TradeItem]> past-trades;
     in property <TradeView> trade;
     in property <[MsgItem]> messages;
+    in property <DealView> deal;
+    in-out property <string> trade-confirming;
+    in-out property <string> trade-details-draft;
     in-out property <bool> trade-concluding;
     in-out property <bool> trade-confirm-delete;
     callback open-trade(string);
     callback open-past-trade(string);
     callback close-offer(string);
     callback send-message(string);
+    callback trade-pick-amount(string);
+    callback trade-pick-bitcoin(string);
+    callback trade-pick-payment(string);
+    callback trade-give-details(string);
+    callback trade-mark-sent();
     callback conclude-trade(bool, string);
     callback archive-trade();
     callback delete-trade();
@@ -312,6 +551,8 @@ export component AppWindow inherits Window {
     // on wide screens the content stays in a column of at most this width, centered
     property <length> max-content-width: 1200px;
     property <length> side-gap: max(0px, (root.width - root.max-content-width) / 2);
+    // room for the deal panel next to the chat
+    property <bool> trade-wide: root.width >= 760px;
 
     VerticalLayout {
         // header, extended under the status bar on phones that draw behind it
@@ -1037,52 +1278,116 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    ListView {
-                        vertical-stretch: 1;
-                        for msg in root.messages: HorizontalLayout {
-                            padding-bottom: 6px;
+                    // on wide screens the deal sits next to the chat, otherwise above it
+                    if root.deal.active && !root.trade-wide: sv-deal-top := ScrollView {
+                        height: min(dp-top.preferred-height, root.height * 0.45);
+                        VerticalLayout {
+                            width: sv-deal-top.visible-width;
                             padding-right: 6px;
-                            alignment: msg.mine ? end : start;
-                            Rectangle {
-                                max-width: 300px;
-                                border-radius: 10px;
-                                background: msg.mine ? #f7931a33 : Palette.alternate-background;
-                                VerticalLayout {
-                                    padding: 8px;
-                                    Text {
-                                        text: msg.text;
-                                        wrap: word-wrap;
-                                    }
-
-                                    Muted {
-                                        text: msg.time;
-                                        horizontal-alignment: right;
-                                    }
+                            dp-top := DealPanel {
+                                deal: root.deal;
+                                confirming <=> root.trade-confirming;
+                                draft <=> root.trade-details-draft;
+                                pick-amount(a) => {
+                                    root.trade-pick-amount(a);
+                                }
+                                pick-bitcoin(m) => {
+                                    root.trade-pick-bitcoin(m);
+                                }
+                                pick-payment(m) => {
+                                    root.trade-pick-payment(m);
+                                }
+                                give-details(d) => {
+                                    root.trade-give-details(d);
+                                }
+                                mark-sent => {
+                                    root.trade-mark-sent();
                                 }
                             }
                         }
                     }
+                    HorizontalLayout {
+                        vertical-stretch: 1;
+                        spacing: 12px;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 8px;
+                            ListView {
+                                vertical-stretch: 1;
+                                for msg in root.messages: HorizontalLayout {
+                                    padding-bottom: 6px;
+                                    padding-right: 6px;
+                                    alignment: msg.mine ? end : start;
+                                    Rectangle {
+                                        max-width: 300px;
+                                        border-radius: 10px;
+                                        background: msg.mine ? #f7931a33 : Palette.alternate-background;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            Text {
+                                                text: msg.text;
+                                                wrap: word-wrap;
+                                            }
 
-                    if root.trade.ongoing && !root.trade.blocked: HorizontalLayout {
-                        spacing: 8px;
-                        input := LineEdit {
-                            placeholder-text: "message";
-                            accepted => {
-                                root.send-message(self.text);
-                                self.text = "";
+                                            Muted {
+                                                text: msg.time;
+                                                horizontal-alignment: right;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if root.trade.ongoing && !root.trade.blocked: HorizontalLayout {
+                                spacing: 8px;
+                                input := LineEdit {
+                                    placeholder-text: "message";
+                                    accepted => {
+                                        root.send-message(self.text);
+                                        self.text = "";
+                                    }
+                                }
+
+                                Button {
+                                    text: "Send";
+                                    clicked => {
+                                        root.send-message(input.text);
+                                        input.text = "";
+                                    }
+                                }
+                            }
+                            if !root.trade.ongoing: Muted {
+                                text: "this trade is over. messages are kept here as they were.";
                             }
                         }
 
-                        Button {
-                            text: "Send";
-                            clicked => {
-                                root.send-message(input.text);
-                                input.text = "";
+                        if root.deal.active && root.trade-wide: sv-deal := ScrollView {
+                            width: 340px;
+                            VerticalLayout {
+                                width: sv-deal.visible-width;
+                                padding-right: 6px;
+                                DealPanel {
+                                    deal: root.deal;
+                                    confirming <=> root.trade-confirming;
+                                    draft <=> root.trade-details-draft;
+                                    pick-amount(a) => {
+                                        root.trade-pick-amount(a);
+                                    }
+                                    pick-bitcoin(m) => {
+                                        root.trade-pick-bitcoin(m);
+                                    }
+                                    pick-payment(m) => {
+                                        root.trade-pick-payment(m);
+                                    }
+                                    give-details(d) => {
+                                        root.trade-give-details(d);
+                                    }
+                                    mark-sent => {
+                                        root.trade-mark-sent();
+                                    }
+                                }
                             }
                         }
-                    }
-                    if !root.trade.ongoing: Muted {
-                        text: "this trade is over. messages are kept here as they were.";
                     }
                 }
 

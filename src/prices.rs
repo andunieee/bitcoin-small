@@ -190,6 +190,29 @@ pub fn format_amount(v: f64) -> String {
     v.to_string()
 }
 
+pub fn thousands(v: f64) -> String {
+    let int = v.round() as i64;
+    let digits = int.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if int < 0 { format!("-{out}") } else { out }
+}
+
+/// a fiat amount with thousands separators, and cents only when there are any
+pub fn fiat(v: f64) -> String {
+    let cents = (v * 100.0).round() as i64;
+    let int = thousands((cents / 100) as f64);
+    match cents % 100 {
+        0 => int,
+        c => format!("{int}.{c:02}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

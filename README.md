@@ -144,6 +144,27 @@ ones. When a trade is over you can:
 Ending a trade stops the app from listening to that conversation. If the same person starts a new trade later, it
 only shows messages from after it started. DMs stay on relays for 30 days, so older ones would otherwise come back.
 
+#### Structured trade messages
+
+Some messages in a trade's chat are made by buttons, not typed. They are ordinary rumors whose `content` says in
+plain English what happened, and which carry the same thing as data in a `trade` tag:
+
+```jsonc
+["trade", "amount", "50"]                  // "Let's trade 50 USD."
+["trade", "bitcoin-method", "lightning"]   // "Let's send the bitcoin via lightning."
+["trade", "payment-method", "Zelle"]       // "Let's send the USD via Zelle."
+["trade", "bitcoin-details", "lnbc1…"]     // "Send the bitcoin to: …", from whoever receives the bitcoin
+["trade", "payment-details", "me@zelle"]   // "Send the USD to: …", from whoever receives the fiat
+["trade", "sent"]                          // "I've sent the 50 USD." / "I've sent the bitcoin."
+```
+
+Both sides replay these, in order, on top of the offer's terms, to get the same state of the deal (`src/deal.rs`).
+The taker picks the amount and the methods among what the offer allows. Anything the offer leaves no choice about is
+decided from the start. Then each side gives the details for what they receive, the taker sends their part first and
+says so, and the maker sends theirs after that. Each value is set once. Actions from the wrong side, out of order,
+or outside the offer's terms are ignored. The maker learns which offer the trade is about from the `e` tag on the
+taker's messages.
+
 ### Local storage
 
 Everything is in the app's data directory:
@@ -192,6 +213,7 @@ with a newcomer.
 | `src/prices.rs`   | hardcoded currencies, price APIs and their fetch functions, premium parsing                                             |
 | `src/store.rs`    | key, json state (relays, open offers, ongoing trades, rumor ids, blocklist, labels), redb event database, trust queries |
 | `src/form.rs`     | defaults for the new offer form, from the locale and your last offers                                                   |
+| `src/deal.rs`     | structured trade messages, and the state of a deal replayed from them                                                   |
 | `src/history.rs`  | past trades, in redb                                                                                                    |
 | `src/app.rs`      | relay subscriptions, publishing, and the glue to the UI                                                                 |
 | `ui/app.slint`    | the interface: market, offer, new offer, trades, trade, profile, people, settings                                       |

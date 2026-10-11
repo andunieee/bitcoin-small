@@ -12,13 +12,15 @@ use tokio_with_wasm::alias as tokio;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
+use crate::deal::{self, Action, Deal, OfferTerms, Role, Step};
 use crate::form::{self, OfferTemplate};
 use crate::history::{Outcome, PastTrade};
-use crate::prices::{self, PriceApi};
+use crate::prices::{self, PriceApi, fiat, thousands};
 use crate::protocol::*;
 use crate::store::{ENOUGH_OWN_REPORTS, Message, MyOffer, Store, TRUSTED_PEERS_TO_ASK, Trade};
 use crate::{
-    AppWindow, MsgItem, OfferItem, PayItem, PersonItem, RelayItem, ReportItem, TradeItem, TradeView,
+    AppWindow, DealRow, DealView, MsgItem, OfferItem, PayItem, PersonItem, RelayItem, ReportItem,
+    TradeItem, TradeView,
 };
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(12);
@@ -274,6 +276,35 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     let a = app.clone();
     ui.on_send_message(move |text| a.send_message(text.trim()));
+
+    let a = app.clone();
+    ui.on_trade_pick_amount(move |text| match prices::parse_amount(&text) {
+        Some(amount) => a.send_action(Action::Amount(amount)),
+        None => a.status("enter an amount, like 50 or 20.5"),
+    });
+
+    let a = app.clone();
+    ui.on_trade_pick_bitcoin(move |m| a.send_action(Action::BitcoinMethod(m.into())));
+
+    let a = app.clone();
+    ui.on_trade_pick_payment(move |m| a.send_action(Action::PaymentMethod(m.into())));
+
+    // whoever gives details gives the ones for what they receive, so there is only one kind each
+    let a = app.clone();
+    ui.on_trade_give_details(move |details| {
+        let details = details.trim().to_string();
+        let receives_bitcoin = a
+            .current_terms()
+            .is_some_and(|t| t.my_role() == t.bitcoin_receiver());
+        a.send_action(if receives_bitcoin {
+            Action::BitcoinDetails(details)
+        } else {
+            Action::PaymentDetails(details)
+        });
+    });
+
+    let a = app.clone();
+    ui.on_trade_mark_sent(move || a.send_action(Action::Sent));
 
     let a = app.clone();
     ui.on_open_profile(move |who| {
@@ -644,6 +675,16 @@ impl App {
             .map(|o| (o.currency.clone(), o.price_api.clone()))
             .collect();
         pairs.insert(self.form_pair.lock().unwrap().clone());
+        pairs.extend(
+            self.store
+                .lock()
+                .unwrap()
+                .state
+                .trades
+                .values()
+                .filter_map(|t| t.offer.as_ref())
+                .map(|o| (o.currency.clone(), o.price_api.clone())),
+        );
         self.fetch_pairs(pairs).await;
     }
 
@@ -674,6 +715,7 @@ impl App {
         self.render_offers();
         // also drops our offers that expired since the last time
         self.render_trades();
+        self.render_trade();
         self.render_create_preview();
     }
 
@@ -841,7 +883,9 @@ impl App {
             prices::parse_amount(&ui.get_create_amount_min()),
             prices::parse_amount(&ui.get_create_amount_max()),
         ) else {
-            self.status(format!("enter the minimum and maximum amount in {currency}"));
+            self.status(format!(
+                "enter the minimum and maximum amount in {currency}"
+            ));
             return;
         };
         if amount_min > amount_max {
@@ -1100,6 +1144,20 @@ impl App {
             if store.state.my_rumors.contains(&rumor.id) {
                 return;
             }
+            // the taker's messages point at the offer they took, which is how we, the maker,
+            // learn which of our offers this trade is about
+            let offer = rumor
+                .tags
+                .iter()
+                .find(|t| t.len() >= 2 && t[0] == "e")
+                .and_then(|t| {
+                    store
+                        .state
+                        .my_offers
+                        .iter()
+                        .find(|o| o.event.id.to_hex() == t[1])
+                })
+                .and_then(|o| Offer::from_event(&o.event));
             let Some(t) = store.state.trades.get_mut(&conv.peer.to_hex()) else {
                 return;
             };
@@ -1108,11 +1166,24 @@ impl App {
             {
                 return;
             }
+            if t.offer.is_none()
+                && let Some(offer) = offer
+            {
+                t.offer_id = Some(offer.id.to_hex());
+                t.offer_summary = offer_summary(&offer);
+                t.offer = Some(OfferTerms::from_offer(&offer, true));
+            }
+            let action = rumor
+                .tags
+                .iter()
+                .find(|t| t.first().is_some_and(|n| n == deal::TAG))
+                .cloned();
             t.messages.push(Message {
                 id: rumor.id,
                 created_at: rumor.created_at,
                 mine: false,
                 text: rumor.content,
+                action,
             });
             t.messages.sort_by_key(|m| m.created_at);
             store.persist();
@@ -1156,14 +1227,8 @@ impl App {
                 });
             t.relays = offer.relays.clone();
             t.offer_id = Some(offer.id.to_hex());
-            t.offer_summary = format!(
-                "maker {}s bitcoin for {} at market {} · {} · {}",
-                offer.side.as_str(),
-                offer.currency,
-                prices::format_premium(offer.premium),
-                amount_range(offer.amount_min, offer.amount_max, &offer.currency),
-                offer.payment_methods.join(", ")
-            );
+            t.offer_summary = offer_summary(&offer);
+            t.offer = Some(OfferTerms::from_offer(&offer, false));
             store.persist();
         }
         self.ensure_dm_sub(offer.maker, true);
@@ -1229,9 +1294,19 @@ impl App {
     fn show_trade(self: &Arc<Self>, which: TradeRef) {
         *self.current_trade.lock().unwrap() = Some(which);
         self.render_trade();
+        // the price is usually there already, from the offer in the market
+        if let Some(t) = self.current_terms() {
+            let pair = (t.currency, t.price_api);
+            if !self.prices.lock().unwrap().contains_key(&pair) {
+                let app = self.clone();
+                tokio::spawn(async move { app.fetch_pairs(HashSet::from([pair])).await });
+            }
+        }
         let _ = self.ui.upgrade_in_event_loop(|ui| {
             ui.set_trade_confirm_delete(false);
             ui.set_trade_concluding(false);
+            ui.set_trade_confirming("".into());
+            ui.set_trade_details_draft("".into());
             ui.set_back_page(3);
             ui.set_page(4);
         });
@@ -1267,7 +1342,7 @@ impl App {
                     .into(),
                     ..Default::default()
                 };
-                (peer, (view, t.messages.clone()))
+                (peer, (view, t.offer.clone(), t.messages.clone()))
             }
             TradeRef::Past(id) => {
                 let Some(t) = store.history.get(id) else {
@@ -1293,10 +1368,16 @@ impl App {
                     .into(),
                     ..Default::default()
                 };
-                (peer, (view, t.messages))
+                (peer, (view, t.offer, t.messages))
             }
         };
-        let (mut view, messages) = view;
+        let (mut view, terms, messages) = view;
+        let deal = terms.map(|terms| {
+            let deal = Deal::replay(&terms, &messages);
+            // only for ongoing trades, today's price says nothing about a past one
+            let price = view.ongoing.then(|| self.trade_price(&terms));
+            (terms, deal, price)
+        });
         let s = &store.state;
         view.peer = peer.to_npub().into();
         view.peer_short = short_npub(&peer).into();
@@ -1318,6 +1399,10 @@ impl App {
             .collect();
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
             ui.set_trade(view);
+            ui.set_deal(match deal {
+                Some((terms, deal, price)) => deal_view(&terms, &deal, price),
+                None => DealView::default(),
+            });
             ui.set_messages(ModelRc::new(VecModel::from(msgs)));
         });
     }
@@ -1329,6 +1414,74 @@ impl App {
         let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
             return;
         };
+        self.send(peer, text, None);
+    }
+
+    /// what a bitcoin costs in a trade: the market price from the offer's source plus its premium.
+    /// or why we don't know.
+    fn trade_price(&self, terms: &OfferTerms) -> Result<f64, String> {
+        let key = (terms.currency.clone(), terms.price_api.clone());
+        if let Some(market) = self.prices.lock().unwrap().get(&key) {
+            return Ok(prices::apply_premium(*market, terms.premium));
+        }
+        if PriceApi::from_id(&terms.price_api).is_none() {
+            return Err(format!("unknown price source '{}'", terms.price_api));
+        }
+        match self.price_errors.lock().unwrap().get(&key) {
+            Some(err) => Err(format!(
+                "failed to fetch the {} price: {err}",
+                terms.price_api
+            )),
+            None => Err("fetching the market price…".into()),
+        }
+    }
+
+    /// the terms of the offer behind the ongoing trade on screen, if it came from one
+    fn current_terms(&self) -> Option<OfferTerms> {
+        let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
+            return None;
+        };
+        let store = self.store.lock().unwrap();
+        store.state.trades.get(&peer.to_hex())?.offer.clone()
+    }
+
+    /// a structured message: its text is made up from the action, which goes in a tag
+    fn send_action(self: &Arc<Self>, action: Action) {
+        let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
+            return;
+        };
+        let text = {
+            let store = self.store.lock().unwrap();
+            let Some(terms) = store
+                .state
+                .trades
+                .get(&peer.to_hex())
+                .and_then(|t| Some((t.offer.as_ref()?, &t.messages)))
+                .map(|(terms, messages)| (terms.clone(), Deal::replay(terms, messages)))
+            else {
+                return;
+            };
+            let (terms, deal) = terms;
+            let me = terms.my_role();
+            if let Err(err) = deal.check(&terms, me, &action) {
+                drop(store);
+                self.status(err);
+                return;
+            }
+            action.text(&terms, me, &deal)
+        };
+        if text.len() > 8000 {
+            self.status("that is too long");
+            return;
+        }
+        self.send(peer, &text, Some(action));
+        let _ = self.ui.upgrade_in_event_loop(|ui| {
+            ui.set_trade_confirming("".into());
+            ui.set_trade_details_draft("".into());
+        });
+    }
+
+    fn send(self: &Arc<Self>, peer: PubKey, text: &str, action: Option<Action>) {
         if self.is_blocked(&peer) {
             self.status("unblock them first");
             return;
@@ -1341,7 +1494,8 @@ impl App {
                 return;
             };
             let offer = t.offer_id.as_deref().and_then(|h| ID::from_hex(h).ok());
-            let (rumor, evt) = conv.wrap(&self.me(), text, offer);
+            let action = action.map(|a| a.to_tag());
+            let (rumor, evt) = conv.wrap(&self.me(), text, offer, action.clone());
             // until they answer we keep poking them, as they only start listening after a ping
             let needs_ping = !t.messages.iter().any(|m| !m.mine);
             let relays = t.relays.clone();
@@ -1350,6 +1504,7 @@ impl App {
                 created_at: rumor.created_at,
                 mine: true,
                 text: rumor.content,
+                action,
             });
             state.my_rumors.insert(rumor.id);
             store.persist();
@@ -1749,6 +1904,9 @@ fn report_item(labels: &BTreeMap<String, String>, e: &Event, show_subject: bool)
 }
 
 fn trade_status(t: &Trade) -> String {
+    if let Some(terms) = &t.offer {
+        return Deal::replay(terms, &t.messages).next_step(terms);
+    }
     let from_them = t.messages.iter().any(|m| !m.mine);
     let from_me = t.messages.iter().any(|m| m.mine);
     match t.messages.last() {
@@ -1757,6 +1915,182 @@ fn trade_status(t: &Trade) -> String {
         Some(m) if !m.mine => "negotiating · your turn".into(),
         _ => "negotiating · their turn".into(),
     }
+}
+
+fn offer_summary(offer: &Offer) -> String {
+    format!(
+        "maker {}s bitcoin for {} at market {} · {} · {}",
+        offer.side.as_str(),
+        offer.currency,
+        prices::format_premium(offer.premium),
+        amount_range(offer.amount_min, offer.amount_max, &offer.currency),
+        offer.payment_methods.join(", ")
+    )
+}
+
+/// the deal panel next to the chat: where the trade stands, and the forms for our next steps
+/// `price` is what a bitcoin costs in this trade, absent for past trades
+fn deal_view(terms: &OfferTerms, deal: &Deal, price: Option<Result<f64, String>>) -> DealView {
+    let ongoing = price.is_some();
+    let price_status = price;
+    let price = price_status.clone().and_then(|p| p.ok());
+    let in_sats = |amount: f64| match price {
+        Some(p) => format!(" ≈ {} sats", thousands(deal::sats(amount, p) as f64)),
+        None => String::new(),
+    };
+    let me = terms.my_role();
+    let cur = &terms.currency;
+    let i_get_bitcoin = me == terms.bitcoin_receiver();
+    let who = |role: Role| if role == me { "you" } else { "they" };
+
+    let method = |m: &Option<String>| match m.as_deref() {
+        None => "to be picked".to_string(),
+        Some("") => "agree in the chat".into(),
+        Some(m) => m.into(),
+    };
+    let details = |d: &Option<String>| d.clone().unwrap_or_else(|| "not given yet".into());
+    let sent = |done: bool| if done { "✓ sent" } else { "not yet" }.to_string();
+    let to_whom = |receiver: Role| if receiver == me { "you" } else { "them" };
+    let mut rows = vec![
+        (
+            "amount".to_string(),
+            match deal.amount {
+                Some(a) => format!("{} {cur}{}", fiat(a), in_sats(a)),
+                None => format!(
+                    "to be picked, {}",
+                    amount_range(terms.amount_min, terms.amount_max, cur)
+                ),
+            },
+        ),
+        ("bitcoin sent via".into(), method(&deal.bitcoin_method)),
+        (format!("{cur} sent via"), method(&deal.payment_method)),
+        (
+            format!("bitcoin goes to {}", to_whom(terms.bitcoin_receiver())),
+            details(&deal.bitcoin_details),
+        ),
+        (
+            format!(
+                "{cur} goes to {}",
+                to_whom(terms.bitcoin_receiver().other())
+            ),
+            details(&deal.payment_details),
+        ),
+        (
+            format!("{} send first", who(Role::Taker)),
+            sent(deal.taker_sent),
+        ),
+        (
+            format!("then {} send", who(Role::Maker)),
+            sent(deal.maker_sent),
+        ),
+    ];
+
+    let price_row = match &price_status {
+        Some(Ok(p)) => format!(
+            "{} {cur}/BTC, {} {} · it moves with the market",
+            thousands(*p),
+            terms.price_api,
+            prices::format_premium(terms.premium)
+        ),
+        Some(Err(why)) => why.clone(),
+        None => format!(
+            "{} {}",
+            terms.price_api,
+            prices::format_premium(terms.premium)
+        ),
+    };
+    rows.insert(1, ("price".into(), price_row));
+
+    let mut view = DealView {
+        active: true,
+        sats_per_unit: price.map(|p| (100_000_000.0 / p) as f32).unwrap_or(0.0),
+        role: format!(
+            "you are {} bitcoin. {} took the offer, so {} send first.",
+            if i_get_bitcoin { "buying" } else { "selling" },
+            if me == Role::Taker { "you" } else { "they" },
+            who(Role::Taker),
+        )
+        .into(),
+        next_step: deal.next_step(terms).into(),
+        my_turn: deal.pending().first().is_some_and(|s| s.who(terms) == me),
+        concluded: deal.concluded(),
+        rows: ModelRc::new(VecModel::from(
+            rows.into_iter()
+                .map(|(label, value)| DealRow {
+                    label: label.into(),
+                    value: value.into(),
+                })
+                .collect::<Vec<_>>(),
+        )),
+        amount_hint: amount_range(terms.amount_min, terms.amount_max, cur).into(),
+        ..Default::default()
+    };
+    if !ongoing {
+        return view;
+    }
+    let strings = |v: &[String]| {
+        ModelRc::new(VecModel::from(
+            v.iter().map(SharedString::from).collect::<Vec<_>>(),
+        ))
+    };
+    for step in deal.available(terms, me) {
+        match step {
+            Step::Amount => view.pick_amount = true,
+            Step::BitcoinMethod => view.bitcoin_choices = strings(&terms.bitcoin_methods),
+            Step::PaymentMethod => view.payment_choices = strings(&terms.payment_methods),
+            Step::BitcoinDetails | Step::PaymentDetails => {
+                view.give_details = true;
+                let (what, method) = if step == Step::BitcoinDetails {
+                    let m = deal.bitcoin_method.clone().unwrap_or_default();
+                    (deal::destination_name(&m).to_string(), m)
+                } else {
+                    let m = deal.payment_method.clone().unwrap_or_default();
+                    (format!("{cur} payment details"), m)
+                };
+                view.details_label = format!("your {what}").into();
+                view.details_hint = if method.is_empty() {
+                    "where they should send it.".to_string()
+                } else {
+                    format!("where they should send it via {method}.")
+                }
+                .into();
+            }
+            Step::TakerSends | Step::MakerSends => {
+                view.can_send = true;
+                let (what, via, to) = if i_get_bitcoin {
+                    let a = deal.amount.unwrap_or_default();
+                    (
+                        format!("{} {cur}", fiat(a)),
+                        deal.payment_method.clone(),
+                        deal.payment_details.clone(),
+                    )
+                } else {
+                    (
+                        match deal.amount.zip(price) {
+                            Some((a, p)) => {
+                                format!("≈ {} sats", thousands(deal::sats(a, p) as f64))
+                            }
+                            None => "the bitcoin".to_string(),
+                        },
+                        deal.bitcoin_method.clone(),
+                        deal.bitcoin_details.clone(),
+                    )
+                };
+                let via = via
+                    .filter(|m| !m.is_empty())
+                    .map(|m| format!(" via {m}"))
+                    .unwrap_or_default();
+                view.send_hint = format!("send {what}{via} to:\n{}", to.unwrap_or_default()).into();
+                view.send_label = if i_get_bitcoin {
+                    format!("I've sent {what}")
+                } else {
+                    "I've sent the bitcoin".into()
+                }
+                .into();
+            }
+        }
+    }
+    view
 }
 
 fn past_status(t: &PastTrade) -> String {
@@ -1798,29 +2132,6 @@ fn ago(ts: Timestamp) -> String {
         60..3600 => format!("{}m ago", secs / 60),
         3600..86400 => format!("{}h ago", secs / 3600),
         _ => format!("{}d ago", secs / 86400),
-    }
-}
-
-fn thousands(v: f64) -> String {
-    let int = v.round() as i64;
-    let digits = int.unsigned_abs().to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    if int < 0 { format!("-{out}") } else { out }
-}
-
-/// a fiat amount with thousands separators, and cents only when there are any
-fn fiat(v: f64) -> String {
-    let cents = (v * 100.0).round() as i64;
-    let int = thousands((cents / 100) as f64);
-    match cents % 100 {
-        0 => int,
-        c => format!("{int}.{c:02}"),
     }
 }
 

@@ -25,11 +25,17 @@ No history isn't a red flag in itself: everyone starts with none. It just means 
 
 ## Contact and agree
 
-Tap **Contact maker** to open a private chat. Everything is decided there:
+Tap **Contact maker** to open a private chat. Next to it, the trade shows what has been agreed so far and what has
+to happen next:
 
-1. the exact amount of money and of bitcoin,
-2. the payment details, like the bank account or the lightning invoice,
-3. **who goes first**.
+1. you pick the amount, and how the bitcoin and the money are sent, among what the offer allows,
+2. each of you gives the details for what you receive, like the bank account or the lightning invoice. Check them
+   twice before sending: wrong details can mean money lost for good,
+3. **you, the taker, send first**, and tap the button saying so. Then the maker sends their part.
+
+Each of these sends a message in the chat, so the other side sees it too. The trade also shows how many sats the
+amount is worth, at the offer's price: the market price from its source plus its premium. That price follows the
+market, so it can move a little while you trade. Anything else you settle by chatting.
 
 The trade appears under **Trades → Ongoing**. Once it's done, tap **Conclude** to say how it went. That publishes a
 short report about the other person, which helps you and the people who trust you next time. **Archive** puts the

@@ -3,6 +3,7 @@
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
+use crate::deal::OfferTerms;
 use crate::store::{Message, Trade};
 
 /// id -> the past trade, as json
@@ -38,6 +39,8 @@ pub struct PastTrade {
     pub peer: String,
     pub offer_id: Option<String>,
     pub offer_summary: String,
+    #[serde(default)]
+    pub offer: Option<OfferTerms>,
     pub started_at: u32,
     pub started_by_me: bool,
     pub ended_at: u32,
@@ -75,6 +78,7 @@ impl History {
             peer: peer.to_string(),
             offer_id: trade.offer_id.clone(),
             offer_summary: trade.offer_summary.clone(),
+            offer: trade.offer.clone(),
             started_at: trade.started_at,
             started_by_me: trade.started_by_me,
             ended_at,
@@ -181,6 +185,7 @@ mod tests {
                 created_at: 11,
                 mine: true,
                 text: "hi 'there'".into(),
+                ..Default::default()
             }],
             ..Default::default()
         };

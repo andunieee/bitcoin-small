@@ -78,6 +78,8 @@ struct App {
 
     current_trade: Mutex<Option<TradeRef>>,
     current_profile: Mutex<Option<PubKey>>,
+    /// held while quoting prices, so a quote isn't sent twice
+    quoting: Mutex<()>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -126,6 +128,7 @@ fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
         dm_subs: Mutex::new(HashMap::new()),
         current_trade: Mutex::new(None),
         current_profile: Mutex::new(None),
+        quoting: Mutex::new(()),
     });
 
     setup_ui(&app, &ui);
@@ -305,6 +308,14 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     let a = app.clone();
     ui.on_trade_mark_sent(move || a.send_action(Action::Sent));
+
+    let a = app.clone();
+    ui.on_trade_quote_price(
+        move |text| match prices::parse_amount(&text.replace(',', "")) {
+            Some(price) => a.send_action(Action::Price(price)),
+            None => a.status("enter the price of one bitcoin, like 61234.5"),
+        },
+    );
 
     let a = app.clone();
     ui.on_open_profile(move |who| {
@@ -715,8 +726,9 @@ impl App {
         self.render_offers();
         // also drops our offers that expired since the last time
         self.render_trades();
-        self.render_trade();
         self.render_create_preview();
+        self.settle_prices();
+        self.render_trade();
     }
 
     fn offer_item(&self, o: &Offer) -> OfferItem {
@@ -1137,6 +1149,7 @@ impl App {
         let Some(rumor) = conv.unwrap(&evt) else {
             return;
         };
+        let mut new_pair = None;
         {
             let mut store = self.store.lock().unwrap();
             // whoever signed this could have been either of us: only our local memory of the rumors
@@ -1172,6 +1185,7 @@ impl App {
                 t.offer_id = Some(offer.id.to_hex());
                 t.offer_summary = offer_summary(&offer);
                 t.offer = Some(OfferTerms::from_offer(&offer, true));
+                new_pair = Some((offer.currency, offer.price_api));
             }
             let action = rumor
                 .tags
@@ -1188,6 +1202,12 @@ impl App {
             t.messages.sort_by_key(|m| m.created_at);
             store.persist();
         }
+        // we need the price of an offer to quote it to its taker
+        if let Some(pair) = new_pair.filter(|p| !self.prices.lock().unwrap().contains_key(p)) {
+            let app = self.clone();
+            tokio::spawn(async move { app.fetch_pairs(HashSet::from([pair])).await });
+        }
+        self.settle_prices();
         self.render_trades();
         if *self.current_trade.lock().unwrap() == Some(TradeRef::Ongoing(conv.peer)) {
             self.render_trade();
@@ -1233,6 +1253,11 @@ impl App {
         }
         self.ensure_dm_sub(offer.maker, true);
         self.send_ping(offer.maker);
+        // there is nothing to pick about a fixed amount, but the maker answers it with the price
+        let terms = OfferTerms::from_offer(&offer, false);
+        if terms.fixed_amount() {
+            self.send_action_to(offer.maker, Action::Amount(offer.amount_min), true);
+        }
         self.render_trades();
         self.open_trade(offer.maker);
     }
@@ -1342,7 +1367,10 @@ impl App {
                     .into(),
                     ..Default::default()
                 };
-                (peer, (view, t.offer.clone(), t.messages.clone()))
+                (
+                    peer,
+                    (view, t.offer.clone(), t.messages.clone(), t.price_check),
+                )
             }
             TradeRef::Past(id) => {
                 let Some(t) = store.history.get(id) else {
@@ -1368,15 +1396,15 @@ impl App {
                     .into(),
                     ..Default::default()
                 };
-                (peer, (view, t.offer, t.messages))
+                (peer, (view, t.offer, t.messages, None))
             }
         };
-        let (mut view, terms, messages) = view;
+        let (mut view, terms, messages, check) = view;
         let deal = terms.map(|terms| {
             let deal = Deal::replay(&terms, &messages);
             // only for ongoing trades, today's price says nothing about a past one
-            let price = view.ongoing.then(|| self.trade_price(&terms));
-            (terms, deal, price)
+            let live = view.ongoing.then(|| self.trade_price(&terms));
+            (terms, deal, live)
         });
         let s = &store.state;
         view.peer = peer.to_npub().into();
@@ -1400,7 +1428,7 @@ impl App {
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
             ui.set_trade(view);
             ui.set_deal(match deal {
-                Some((terms, deal, price)) => deal_view(&terms, &deal, price),
+                Some((terms, deal, live)) => deal_view(&terms, &deal, live, check),
                 None => DealView::default(),
             });
             ui.set_messages(ModelRc::new(VecModel::from(msgs)));
@@ -1445,11 +1473,23 @@ impl App {
         store.state.trades.get(&peer.to_hex())?.offer.clone()
     }
 
-    /// a structured message: its text is made up from the action, which goes in a tag
+    /// a structured message in the trade on screen, from a button
     fn send_action(self: &Arc<Self>, action: Action) {
         let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
             return;
         };
+        if self.send_action_to(peer, action, false) {
+            let _ = self.ui.upgrade_in_event_loop(|ui| {
+                ui.set_trade_confirming("".into());
+                ui.set_trade_details_draft("".into());
+            });
+        }
+    }
+
+    /// a structured message: its text is made up from the action, which goes in a tag.
+    /// `quiet` is for the ones the app sends on its own, where a refusal is no news.
+    /// returns whether it was sent.
+    fn send_action_to(self: &Arc<Self>, peer: PubKey, action: Action, quiet: bool) -> bool {
         let text = {
             let store = self.store.lock().unwrap();
             let Some(terms) = store
@@ -1459,26 +1499,78 @@ impl App {
                 .and_then(|t| Some((t.offer.as_ref()?, &t.messages)))
                 .map(|(terms, messages)| (terms.clone(), Deal::replay(terms, messages)))
             else {
-                return;
+                return false;
             };
             let (terms, deal) = terms;
             let me = terms.my_role();
             if let Err(err) = deal.check(&terms, me, &action) {
                 drop(store);
-                self.status(err);
-                return;
+                if !quiet {
+                    self.status(err);
+                }
+                return false;
             }
             action.text(&terms, me, &deal)
         };
         if text.len() > 8000 {
             self.status("that is too long");
-            return;
+            return false;
         }
         self.send(peer, &text, Some(action));
-        let _ = self.ui.upgrade_in_event_loop(|ui| {
-            ui.set_trade_confirming("".into());
-            ui.set_trade_details_draft("".into());
-        });
+        true
+    }
+
+    /// the maker's price is the one that counts, so as the maker we quote it as soon as we know
+    /// the amount and the market price. as the taker we check it against the market price from
+    /// the offer's source, once, when it arrives (or when that price does).
+    fn settle_prices(self: &Arc<Self>) {
+        let _quoting = self.quoting.lock().unwrap();
+        let trades: Vec<(PubKey, OfferTerms, Deal, Option<f64>)> = {
+            let store = self.store.lock().unwrap();
+            store
+                .state
+                .trades
+                .iter()
+                .filter(|(hex, _)| !store.state.blocked.contains(*hex))
+                .filter_map(|(hex, t)| {
+                    let terms = t.offer.clone()?;
+                    let deal = Deal::replay(&terms, &t.messages);
+                    Some((hex.parse().ok()?, terms, deal, t.price_check))
+                })
+                .collect()
+        };
+        for (peer, terms, deal, checked) in trades {
+            let Ok(expected) = self.trade_price(&terms) else {
+                continue;
+            };
+            match terms.my_role() {
+                Role::Maker => {
+                    if deal.available(&terms, Role::Maker).contains(&Step::Price) {
+                        self.send_action_to(peer, Action::Price(expected), true);
+                    }
+                }
+                Role::Taker => {
+                    let Some(quoted) = deal.price.filter(|_| checked.is_none()) else {
+                        continue;
+                    };
+                    {
+                        let mut store = self.store.lock().unwrap();
+                        if let Some(t) = store.state.trades.get_mut(&peer.to_hex()) {
+                            t.price_check = Some(expected);
+                        }
+                        store.persist();
+                    }
+                    let off = deal::deviation_pct(quoted, expected);
+                    if off > deal::PRICE_TOLERANCE_PCT {
+                        self.status(format!(
+                            "{}'s price is {off:.1}% off the market, check it",
+                            self.name(&peer)
+                        ));
+                    }
+                    self.render_trades();
+                }
+            }
+        }
     }
 
     fn send(self: &Arc<Self>, peer: PubKey, text: &str, action: Option<Action>) {
@@ -1905,7 +1997,16 @@ fn report_item(labels: &BTreeMap<String, String>, e: &Event, show_subject: bool)
 
 fn trade_status(t: &Trade) -> String {
     if let Some(terms) = &t.offer {
-        return Deal::replay(terms, &t.messages).next_step(terms);
+        let deal = Deal::replay(terms, &t.messages);
+        let next = deal.next_step(terms);
+        return match deal.price.zip(t.price_check) {
+            Some((quoted, expected))
+                if deal::deviation_pct(quoted, expected) > deal::PRICE_TOLERANCE_PCT =>
+            {
+                format!("⚠ their price is off the market · {next}")
+            }
+            _ => next,
+        };
     }
     let from_them = t.messages.iter().any(|m| !m.mine);
     let from_me = t.messages.iter().any(|m| m.mine);
@@ -1928,20 +2029,27 @@ fn offer_summary(offer: &Offer) -> String {
     )
 }
 
-/// the deal panel next to the chat: where the trade stands, and the forms for our next steps
-/// `price` is what a bitcoin costs in this trade, absent for past trades
-fn deal_view(terms: &OfferTerms, deal: &Deal, price: Option<Result<f64, String>>) -> DealView {
-    let ongoing = price.is_some();
-    let price_status = price;
-    let price = price_status.clone().and_then(|p| p.ok());
-    let in_sats = |amount: f64| match price {
-        Some(p) => format!(" ≈ {} sats", thousands(deal::sats(amount, p) as f64)),
-        None => String::new(),
-    };
+/// the deal panel next to the chat: where the trade stands, and the forms for our next steps.
+/// `live` is what a bitcoin costs now by the offer's price source and premium, absent for past
+/// trades. `check` is what it cost by them when the maker's price arrived, for the taker.
+fn deal_view(
+    terms: &OfferTerms,
+    deal: &Deal,
+    live: Option<Result<f64, String>>,
+    check: Option<f64>,
+) -> DealView {
+    let ongoing = live.is_some();
+    let live_price = live.as_ref().and_then(|p| p.as_ref().ok().copied());
+    let source = format!(
+        "{} {}",
+        terms.price_api,
+        prices::format_premium(terms.premium)
+    );
     let me = terms.my_role();
     let cur = &terms.currency;
     let i_get_bitcoin = me == terms.bitcoin_receiver();
     let who = |role: Role| if role == me { "you" } else { "they" };
+    let sats = |n: u64| format!("{} sats", thousands(n as f64));
 
     let method = |m: &Option<String>| match m.as_deref() {
         None => "to be picked".to_string(),
@@ -1951,17 +2059,60 @@ fn deal_view(terms: &OfferTerms, deal: &Deal, price: Option<Result<f64, String>>
     let details = |d: &Option<String>| d.clone().unwrap_or_else(|| "not given yet".into());
     let sent = |done: bool| if done { "✓ sent" } else { "not yet" }.to_string();
     let to_whom = |receiver: Role| if receiver == me { "you" } else { "them" };
-    let mut rows = vec![
-        (
-            "amount".to_string(),
-            match deal.amount {
-                Some(a) => format!("{} {cur}{}", fiat(a), in_sats(a)),
-                None => format!(
-                    "to be picked, {}",
-                    amount_range(terms.amount_min, terms.amount_max, cur)
-                ),
-            },
+
+    let amount = match (deal.amount, deal.sats(), live_price) {
+        (Some(a), Some(n), _) => format!("{} {cur} = {}", fiat(a), sats(n)),
+        (Some(a), None, Some(p)) => format!(
+            "{} {cur} ≈ {} at the current price",
+            fiat(a),
+            sats(deal::sats(a, p))
         ),
+        (Some(a), None, None) => format!("{} {cur}", fiat(a)),
+        (None, ..) => format!(
+            "to be picked, {}",
+            amount_range(terms.amount_min, terms.amount_max, cur)
+        ),
+    };
+
+    // the maker's price is the one that counts. the taker sees how it compares to the source.
+    let mut price_warning = String::new();
+    let price = match (deal.price, me) {
+        (Some(p), Role::Maker) => format!("{} {cur}/BTC, as you said", thousands(p)),
+        (Some(p), Role::Taker) => {
+            let quoted = format!("{} {cur}/BTC, as they said", thousands(p));
+            match (check, &live) {
+                (Some(expected), _) => {
+                    let off = deal::deviation_pct(p, expected);
+                    if off > deal::PRICE_TOLERANCE_PCT {
+                        price_warning = format!(
+                            "Their price is {off:.1}% off {source}, which said {} {cur}/BTC when \
+                             it arrived. Ask them about it before going on.",
+                            thousands(expected)
+                        );
+                    }
+                    format!("{quoted} · {off:.1}% off {source}")
+                }
+                (None, Some(Err(why))) => format!("{quoted} · couldn't check it: {why}"),
+                _ => quoted,
+            }
+        }
+        (None, Role::Maker) => match &live {
+            Some(Ok(p)) => format!("{} {cur}/BTC by {source}", thousands(*p)),
+            Some(Err(why)) => why.clone(),
+            None => source.clone(),
+        },
+        (None, Role::Taker) => match live_price {
+            Some(p) => format!(
+                "they say it after the amount · now {} {cur}/BTC by {source}",
+                thousands(p)
+            ),
+            None => format!("they say it after the amount, by {source}"),
+        },
+    };
+
+    let rows = vec![
+        ("amount".to_string(), amount),
+        ("price".into(), price),
         ("bitcoin sent via".into(), method(&deal.bitcoin_method)),
         (format!("{cur} sent via"), method(&deal.payment_method)),
         (
@@ -1985,25 +2136,8 @@ fn deal_view(terms: &OfferTerms, deal: &Deal, price: Option<Result<f64, String>>
         ),
     ];
 
-    let price_row = match &price_status {
-        Some(Ok(p)) => format!(
-            "{} {cur}/BTC, {} {} · it moves with the market",
-            thousands(*p),
-            terms.price_api,
-            prices::format_premium(terms.premium)
-        ),
-        Some(Err(why)) => why.clone(),
-        None => format!(
-            "{} {}",
-            terms.price_api,
-            prices::format_premium(terms.premium)
-        ),
-    };
-    rows.insert(1, ("price".into(), price_row));
-
     let mut view = DealView {
         active: true,
-        sats_per_unit: price.map(|p| (100_000_000.0 / p) as f32).unwrap_or(0.0),
         role: format!(
             "you are {} bitcoin. {} took the offer, so {} send first.",
             if i_get_bitcoin { "buying" } else { "selling" },
@@ -2014,6 +2148,7 @@ fn deal_view(terms: &OfferTerms, deal: &Deal, price: Option<Result<f64, String>>
         next_step: deal.next_step(terms).into(),
         my_turn: deal.pending().first().is_some_and(|s| s.who(terms) == me),
         concluded: deal.concluded(),
+        price_warning: price_warning.into(),
         rows: ModelRc::new(VecModel::from(
             rows.into_iter()
                 .map(|(label, value)| DealRow {
@@ -2023,6 +2158,9 @@ fn deal_view(terms: &OfferTerms, deal: &Deal, price: Option<Result<f64, String>>
                 .collect::<Vec<_>>(),
         )),
         amount_hint: amount_range(terms.amount_min, terms.amount_max, cur).into(),
+        sats_per_unit: live_price
+            .map(|p| (100_000_000.0 / p) as f32)
+            .unwrap_or(0.0),
         ..Default::default()
     };
     if !ongoing {
@@ -2036,6 +2174,14 @@ fn deal_view(terms: &OfferTerms, deal: &Deal, price: Option<Result<f64, String>>
     for step in deal.available(terms, me) {
         match step {
             Step::Amount => view.pick_amount = true,
+            // it goes out on its own once we know the market price, unless we can't get it
+            Step::Price => {
+                if let Some(Err(why)) = &live {
+                    view.quote_price = true;
+                    view.quote_hint =
+                        format!("{why}. enter the price of one bitcoin in {cur} yourself.").into();
+                }
+            }
             Step::BitcoinMethod => view.bitcoin_choices = strings(&terms.bitcoin_methods),
             Step::PaymentMethod => view.payment_choices = strings(&terms.payment_methods),
             Step::BitcoinDetails | Step::PaymentDetails => {
@@ -2048,10 +2194,16 @@ fn deal_view(terms: &OfferTerms, deal: &Deal, price: Option<Result<f64, String>>
                     (format!("{cur} payment details"), m)
                 };
                 view.details_label = format!("your {what}").into();
-                view.details_hint = if method.is_empty() {
-                    "where they should send it.".to_string()
+                let amount = if step == Step::BitcoinDetails {
+                    deal.sats().map(sats)
                 } else {
-                    format!("where they should send it via {method}.")
+                    deal.amount.map(|a| format!("{} {cur}", fiat(a)))
+                }
+                .unwrap_or_default();
+                view.details_hint = if method.is_empty() {
+                    format!("where they should send the {amount}.")
+                } else {
+                    format!("where they should send the {amount} via {method}.")
                 }
                 .into();
             }
@@ -2066,12 +2218,7 @@ fn deal_view(terms: &OfferTerms, deal: &Deal, price: Option<Result<f64, String>>
                     )
                 } else {
                     (
-                        match deal.amount.zip(price) {
-                            Some((a, p)) => {
-                                format!("≈ {} sats", thousands(deal::sats(a, p) as f64))
-                            }
-                            None => "the bitcoin".to_string(),
-                        },
+                        sats(deal.sats().unwrap_or_default()),
                         deal.bitcoin_method.clone(),
                         deal.bitcoin_details.clone(),
                     )
@@ -2081,12 +2228,7 @@ fn deal_view(terms: &OfferTerms, deal: &Deal, price: Option<Result<f64, String>>
                     .map(|m| format!(" via {m}"))
                     .unwrap_or_default();
                 view.send_hint = format!("send {what}{via} to:\n{}", to.unwrap_or_default()).into();
-                view.send_label = if i_get_bitcoin {
-                    format!("I've sent {what}")
-                } else {
-                    "I've sent the bitcoin".into()
-                }
-                .into();
+                view.send_label = format!("I've sent the {what}").into();
             }
         }
     }

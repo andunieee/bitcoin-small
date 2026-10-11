@@ -55,11 +55,16 @@ export struct DealView {
     next-step: string,
     my-turn: bool,
     concluded: bool,
+    // for the taker, when the maker's price is too far from the offer's price source
+    price-warning: string,
     rows: [DealRow],
     pick-amount: bool,
     amount-hint: string,
     // to show the amount being typed in sats, zero while the price is unknown
     sats-per-unit: float,
+    // for the maker, when the market price can't be fetched to quote it
+    quote-price: bool,
+    quote-hint: string,
     // non-empty when we have to pick one
     bitcoin-choices: [string],
     payment-choices: [string],
@@ -219,6 +224,7 @@ component DealPanel inherits VerticalLayout {
     in-out property <string> confirming;
     in-out property <string> draft;
     callback pick-amount(string);
+    callback quote-price(string);
     callback pick-bitcoin(string);
     callback pick-payment(string);
     callback give-details(string);
@@ -235,6 +241,22 @@ component DealPanel inherits VerticalLayout {
 
     Muted {
         text: root.deal.role;
+    }
+
+    if root.deal.price-warning != "": Rectangle {
+        background: #c6282833;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #c62828;
+        VerticalLayout {
+            padding: 8px;
+            Text {
+                text: "⚠ " + root.deal.price-warning;
+                wrap: word-wrap;
+                font-size: 13px;
+                font-weight: 700;
+            }
+        }
     }
 
     Card {
@@ -285,6 +307,39 @@ component DealPanel inherits VerticalLayout {
 
             if root.deal.sats-per-unit > 0 && amount.text.is-float(): Muted {
                 text: "≈ " + Math.round(amount.text.to-float() * root.deal.sats-per-unit) + " sats at the current price";
+            }
+        }
+    }
+    if root.deal.quote-price: Card {
+        VerticalLayout {
+            padding: 10px;
+            spacing: 6px;
+            Text {
+                text: "Your price";
+                font-weight: 700;
+            }
+
+            Muted {
+                text: root.deal.quote-hint;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                quote := LineEdit {
+                    placeholder-text: "price of 1 BTC";
+                    input-type: InputType.decimal;
+                    accepted => {
+                        root.quote-price(self.text);
+                    }
+                }
+
+                Button {
+                    text: "Send";
+                    enabled: quote.text != "";
+                    clicked => {
+                        root.quote-price(quote.text);
+                    }
+                }
             }
         }
     }
@@ -512,6 +567,7 @@ export component AppWindow inherits Window {
     callback close-offer(string);
     callback send-message(string);
     callback trade-pick-amount(string);
+    callback trade-quote-price(string);
     callback trade-pick-bitcoin(string);
     callback trade-pick-payment(string);
     callback trade-give-details(string);
@@ -1291,6 +1347,9 @@ export component AppWindow inherits Window {
                                 pick-amount(a) => {
                                     root.trade-pick-amount(a);
                                 }
+                                quote-price(p) => {
+                                    root.trade-quote-price(p);
+                                }
                                 pick-bitcoin(m) => {
                                     root.trade-pick-bitcoin(m);
                                 }
@@ -1372,6 +1431,9 @@ export component AppWindow inherits Window {
                                     draft <=> root.trade-details-draft;
                                     pick-amount(a) => {
                                         root.trade-pick-amount(a);
+                                    }
+                                    quote-price(p) => {
+                                        root.trade-quote-price(p);
                                     }
                                     pick-bitcoin(m) => {
                                         root.trade-pick-bitcoin(m);

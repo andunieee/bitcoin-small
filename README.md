@@ -151,6 +151,7 @@ plain English what happened, and which carry the same thing as data in a `trade`
 
 ```jsonc
 ["trade", "amount", "50"]                  // "Let's trade 50 USD."
+["trade", "price", "61234.56"]             // "The price is 61,234 USD/BTC, so 50 USD is 81,650 sats."
 ["trade", "bitcoin-method", "lightning"]   // "Let's send the bitcoin via lightning."
 ["trade", "payment-method", "Zelle"]       // "Let's send the USD via Zelle."
 ["trade", "bitcoin-details", "lnbc1…"]     // "Send the bitcoin to: …", from whoever receives the bitcoin
@@ -159,8 +160,11 @@ plain English what happened, and which carry the same thing as data in a `trade`
 ```
 
 Both sides replay these, in order, on top of the offer's terms, to get the same state of the deal (`src/deal.rs`).
-The taker picks the amount and the methods among what the offer allows. Anything the offer leaves no choice about is
-decided from the start. Then each side gives the details for what they receive, the taker sends their part first and
+The taker picks the amount and the methods among what the offer allows. A fixed amount is sent as soon as the taker
+contacts the maker, and methods the offer leaves no choice about are decided from the start. The maker's app answers
+the amount with the price of a bitcoin: the market price from the offer's `price_api` plus its `premium`, at that
+moment. That price is the one the trade uses. The taker's app checks it against its own fetch from the same source and
+flags it when it is more than 1% off. Then each side gives the details for what they receive, the taker sends their part first and
 says so, and the maker sends theirs after that. Each value is set once. Actions from the wrong side, out of order,
 or outside the offer's terms are ignored. The maker learns which offer the trade is about from the `e` tag on the
 taker's messages.

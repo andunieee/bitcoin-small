@@ -2,16 +2,21 @@
 //! the rumor, next to an english text that says the same for people (and clients) that don't
 //! read it. both sides replay those actions, in order, to arrive at the same state of the deal.
 //!
-//! the taker picks the amount and the methods among what the offer allows, each side tells the
-//! other where to send what they receive, then the taker sends their side first, and the maker
-//! after that.
+//! the taker picks the amount (sent right away when the offer is for a fixed one) and the methods
+//! among what the offer allows. the maker answers the amount with the price, which is the one
+//! that counts: the taker's app only checks it against the offer's price source. then each side
+//! tells the other where to send what they receive, the taker sends their side first, and the
+//! maker after that.
 
-use crate::prices::{self, fiat};
+use crate::prices::{self, fiat, thousands};
 use crate::protocol::{Offer, Side};
 use crate::store::Message;
 
 /// the name of the rumor tag that carries an action
 pub const TAG: &str = "trade";
+
+/// how far, in percent, the maker's price can be from what the taker expects before it is flagged
+pub const PRICE_TOLERANCE_PCT: f64 = 1.0;
 
 /// what a trade needs from the offer it started from, kept with the trade
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -78,7 +83,7 @@ impl OfferTerms {
         fiat(self.amount_min) == fiat(self.amount_max)
     }
 
-    /// what `who` sends: "the bitcoin" or "the 50 USD"
+    /// what `who` sends: "the 81,650 sats" or "the 50 USD"
     fn what_sends(&self, who: Role, deal: &Deal) -> String {
         if who == self.bitcoin_receiver() {
             match deal.amount {
@@ -86,7 +91,10 @@ impl OfferTerms {
                 None => format!("the {}", self.currency),
             }
         } else {
-            "the bitcoin".into()
+            match deal.sats() {
+                Some(sats) => format!("the {} sats", thousands(sats as f64)),
+                None => "the bitcoin".into(),
+            }
         }
     }
 }
@@ -95,6 +103,8 @@ impl OfferTerms {
 pub enum Action {
     /// how much fiat, in the offer's currency
     Amount(f64),
+    /// how much fiat a bitcoin costs, from the maker, once they know the amount
+    Price(f64),
     BitcoinMethod(String),
     PaymentMethod(String),
     /// where the bitcoin goes: an address, an invoice…
@@ -109,6 +119,7 @@ impl Action {
     pub fn to_tag(&self) -> Vec<String> {
         let (name, value) = match self {
             Action::Amount(a) => ("amount", Some(prices::format_amount(*a))),
+            Action::Price(p) => ("price", Some(prices::format_amount(*p))),
             Action::BitcoinMethod(m) => ("bitcoin-method", Some(m.clone())),
             Action::PaymentMethod(m) => ("payment-method", Some(m.clone())),
             Action::BitcoinDetails(d) => ("bitcoin-details", Some(d.clone())),
@@ -127,6 +138,7 @@ impl Action {
         let value = || tag.get(2).cloned();
         Some(match tag.get(1)?.as_str() {
             "amount" => Action::Amount(prices::parse_amount(tag.get(2)?)?),
+            "price" => Action::Price(prices::parse_amount(tag.get(2)?)?),
             "bitcoin-method" => Action::BitcoinMethod(value()?),
             "payment-method" => Action::PaymentMethod(value()?),
             "bitcoin-details" => Action::BitcoinDetails(value()?),
@@ -140,6 +152,16 @@ impl Action {
     pub fn text(&self, terms: &OfferTerms, who: Role, deal: &Deal) -> String {
         match self {
             Action::Amount(a) => format!("Let's trade {} {}.", fiat(*a), terms.currency),
+            Action::Price(p) => match deal.amount {
+                Some(a) => format!(
+                    "The price is {} {cur}/BTC, so {} {cur} is {} sats.",
+                    thousands(*p),
+                    fiat(a),
+                    thousands(sats(a, *p) as f64),
+                    cur = terms.currency
+                ),
+                None => format!("The price is {} {}/BTC.", thousands(*p), terms.currency),
+            },
             Action::BitcoinMethod(m) => format!("Let's send the bitcoin via {m}."),
             Action::PaymentMethod(m) => format!("Let's send the {} via {m}.", terms.currency),
             Action::BitcoinDetails(d) => format!("Send the bitcoin to:\n{d}"),
@@ -153,6 +175,7 @@ impl Action {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Amount,
+    Price,
     BitcoinMethod,
     PaymentMethod,
     BitcoinDetails,
@@ -161,8 +184,9 @@ pub enum Step {
     MakerSends,
 }
 
-const STEPS: [Step; 7] = [
+const STEPS: [Step; 8] = [
     Step::Amount,
+    Step::Price,
     Step::BitcoinMethod,
     Step::PaymentMethod,
     Step::BitcoinDetails,
@@ -180,13 +204,14 @@ impl Step {
             }
             Step::BitcoinDetails => terms.bitcoin_receiver(),
             Step::PaymentDetails => terms.bitcoin_receiver().other(),
-            Step::MakerSends => Role::Maker,
+            Step::Price | Step::MakerSends => Role::Maker,
         }
     }
 
     fn of(action: &Action, who: Role) -> Step {
         match action {
             Action::Amount(_) => Step::Amount,
+            Action::Price(_) => Step::Price,
             Action::BitcoinMethod(_) => Step::BitcoinMethod,
             Action::PaymentMethod(_) => Step::PaymentMethod,
             Action::BitcoinDetails(_) => Step::BitcoinDetails,
@@ -202,6 +227,8 @@ impl Step {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Deal {
     pub amount: Option<f64>,
+    /// fiat per bitcoin, as the maker said
+    pub price: Option<f64>,
     /// an empty string when the offer didn't say, then it is agreed in the chat
     pub bitcoin_method: Option<String>,
     pub payment_method: Option<String>,
@@ -212,7 +239,8 @@ pub struct Deal {
 }
 
 impl Deal {
-    /// whatever the offer leaves no choice about is decided from the start
+    /// the methods the offer leaves no choice about are decided from the start. the amount isn't,
+    /// as the maker only quotes a price once the taker sends it.
     pub fn new(terms: &OfferTerms) -> Self {
         let only = |options: &[String]| match options {
             [] => Some(String::new()),
@@ -220,7 +248,6 @@ impl Deal {
             _ => None,
         };
         Deal {
-            amount: terms.fixed_amount().then_some(terms.amount_min),
             bitcoin_method: only(&terms.bitcoin_methods),
             payment_method: only(&terms.payment_methods),
             ..Default::default()
@@ -242,6 +269,7 @@ impl Deal {
     pub fn done(&self, step: Step) -> bool {
         match step {
             Step::Amount => self.amount.is_some(),
+            Step::Price => self.price.is_some(),
             Step::BitcoinMethod => self.bitcoin_method.is_some(),
             Step::PaymentMethod => self.payment_method.is_some(),
             Step::BitcoinDetails => self.bitcoin_details.is_some(),
@@ -256,9 +284,10 @@ impl Deal {
         let d = |s| self.done(s);
         match step {
             Step::Amount | Step::BitcoinMethod | Step::PaymentMethod => true,
-            Step::BitcoinDetails => d(Step::Amount) && d(Step::BitcoinMethod),
-            Step::PaymentDetails => d(Step::Amount) && d(Step::PaymentMethod),
-            Step::TakerSends => STEPS[..5].iter().all(|s| d(*s)),
+            Step::Price => d(Step::Amount),
+            Step::BitcoinDetails => d(Step::Price) && d(Step::BitcoinMethod),
+            Step::PaymentDetails => d(Step::Price) && d(Step::PaymentMethod),
+            Step::TakerSends => STEPS[..6].iter().all(|s| d(*s)),
             Step::MakerSends => d(Step::TakerSends),
         }
     }
@@ -274,6 +303,11 @@ impl Deal {
             .into_iter()
             .filter(|s| s.who(terms) == who && self.ready(*s))
             .collect()
+    }
+
+    /// how many sats the amount is, at the maker's price
+    pub fn sats(&self) -> Option<u64> {
+        Some(sats(self.amount?, self.price?))
     }
 
     pub fn concluded(&self) -> bool {
@@ -326,6 +360,7 @@ impl Deal {
         }
         match action {
             Action::Amount(a) => self.amount = Some(*a),
+            Action::Price(p) => self.price = Some(*p),
             Action::BitcoinMethod(m) => self.bitcoin_method = Some(m.clone()),
             Action::PaymentMethod(m) => self.payment_method = Some(m.clone()),
             Action::BitcoinDetails(d) => self.bitcoin_details = Some(d.trim().to_string()),
@@ -346,6 +381,7 @@ impl Deal {
         let mine = step.who(terms) == me;
         let what = match step {
             Step::Amount => "pick the amount".to_string(),
+            Step::Price => "say the price".into(),
             Step::BitcoinMethod => "pick how the bitcoin is sent".into(),
             Step::PaymentMethod => format!("pick how the {} is sent", terms.currency),
             Step::BitcoinDetails => format!(
@@ -373,6 +409,11 @@ impl Deal {
 /// how many satoshis a fiat amount buys at `price` (fiat per bitcoin)
 pub fn sats(amount: f64, price: f64) -> u64 {
     (amount / price * 100_000_000.0).round() as u64
+}
+
+/// how far `quoted` is from `expected`, in percent either way
+pub fn deviation_pct(quoted: f64, expected: f64) -> f64 {
+    (quoted - expected).abs() / expected * 100.0
 }
 
 /// what to ask the bitcoin receiver for, depending on how it is sent
@@ -414,6 +455,7 @@ mod tests {
     fn tags_roundtrip() {
         for a in [
             Action::Amount(50.5),
+            Action::Price(61234.56),
             Action::BitcoinMethod("lightning".into()),
             Action::PaymentMethod("PIX".into()),
             Action::BitcoinDetails("lnbc1…".into()),
@@ -436,7 +478,10 @@ mod tests {
 
     #[test]
     fn single_options_are_decided() {
-        let d = Deal::new(&terms(false));
+        let mut fixed = terms(false);
+        fixed.amount_max = fixed.amount_min;
+        let d = Deal::new(&fixed);
+        // even a fixed amount is sent, the maker answers it with the price
         assert_eq!(d.amount, None);
         assert_eq!(d.bitcoin_method.as_deref(), Some("lightning"));
         assert_eq!(d.payment_method, None);
@@ -452,7 +497,10 @@ mod tests {
                 msg(!t, Action::Amount(50.0)),
                 msg(t, Action::Amount(60.0)), // the maker can't pick it
                 msg(!t, Action::PaymentMethod("Zelle".into())),
-                msg(t, Action::Sent), // too early
+                msg(!t, Action::BitcoinDetails("lnbc0".into())), // before the price, ignored
+                msg(t, Action::Sent),                            // too early
+                msg(!t, Action::Price(100_000.0)),               // the taker can't say it
+                msg(t, Action::Price(100_000.0)),
                 msg(!t, Action::BitcoinDetails("lnbc1".into())),
                 msg(t, Action::PaymentDetails("me@zelle".into())),
                 msg(!t, Action::Sent),
@@ -463,11 +511,21 @@ mod tests {
         let maker = Deal::replay(&terms(true), &chat(false));
         assert_eq!(taker, maker);
         assert_eq!(taker.amount, Some(50.0));
+        assert_eq!(taker.sats(), Some(50_000));
+        assert_eq!(taker.bitcoin_details.as_deref(), Some("lnbc1"));
         assert_eq!(taker.payment_details.as_deref(), Some("me@zelle"));
         assert!(taker.concluded());
 
-        // halfway, the maker gives their zelle while the taker gives the invoice
-        let half = Deal::replay(&terms(true), &chat(false)[..5]);
+        // before the price only the maker has something to do
+        let quoting = Deal::replay(&terms(true), &chat(false)[..6]);
+        assert_eq!(
+            quoting.available(&terms(true), Role::Maker),
+            vec![Step::Price]
+        );
+        assert_eq!(quoting.available(&terms(false), Role::Taker), vec![]);
+
+        // then the maker gives their zelle while the taker gives the invoice
+        let half = Deal::replay(&terms(true), &chat(false)[..8]);
         assert_eq!(
             half.available(&terms(true), Role::Maker),
             vec![Step::PaymentDetails]

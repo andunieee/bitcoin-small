@@ -117,6 +117,10 @@ pub struct Trade {
     /// the terms of that offer. the maker learns which offer it is from the taker's messages.
     #[serde(default)]
     pub offer: Option<OfferTerms>,
+    /// as the taker: what we expected a bitcoin to cost when the maker's price arrived, from the
+    /// offer's price source and premium
+    #[serde(default)]
+    pub price_check: Option<f64>,
     /// messages from before this are left out, they belong to an earlier trade with the same peer
     #[serde(default)]
     pub started_at: u32,

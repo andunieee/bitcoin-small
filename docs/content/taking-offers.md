@@ -33,9 +33,12 @@ to happen next:
    twice before sending: wrong details can mean money lost for good,
 3. **you, the taker, send first**, and tap the button saying so. Then the maker sends their part.
 
-Each of these sends a message in the chat, so the other side sees it too. The trade also shows how many sats the
-amount is worth, at the offer's price: the market price from its source plus its premium. That price follows the
-market, so it can move a little while you trade. Anything else you settle by chatting.
+Each of these sends a message in the chat, so the other side sees it too.
+
+Once you pick the amount, the maker's app answers with the price: the market price from the offer's source plus its
+premium. From then on that price is fixed for the trade, and it decides how many sats the amount is. Your app checks
+it against the same source and warns you if it is too far off. If it is, ask them about it before going any further.
+Anything else you settle by chatting.
 
 The trade appears under **Trades → Ongoing**. Once it's done, tap **Conclude** to say how it went. That publishes a
 short report about the other person, which helps you and the people who trust you next time. **Archive** puts the

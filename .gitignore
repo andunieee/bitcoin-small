@@ -1,3 +1,6 @@
 /target
 /docs/public
 dist
+# the apk signing key, kept out of git. see the justfile
+/release.jks
+/release.jks.password

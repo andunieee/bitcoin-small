@@ -19,8 +19,8 @@ use crate::prices::{self, PriceApi, fiat, thousands};
 use crate::protocol::*;
 use crate::store::{ENOUGH_OWN_REPORTS, Message, MyOffer, Store, TRUSTED_PEERS_TO_ASK, Trade};
 use crate::{
-    AppWindow, DealRow, DealView, MsgItem, OfferItem, PayItem, PersonItem, RelayItem, ReportItem,
-    TradeItem, TradeView,
+    AppWindow, DealRow, DealView, MsgItem, OfferItem, PayItem, PersonItem, RelayAnswer, RelayItem,
+    ReportItem, SentItem, TradeItem, TradeView,
 };
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(12);
@@ -54,6 +54,14 @@ enum TradeRef {
     Past(i64),
 }
 
+/// something we sent, with each relay's answer (none while it is still on its way)
+#[derive(Clone)]
+struct Sent {
+    id: u64,
+    title: String,
+    answers: Vec<(String, Option<Result<(), String>>)>,
+}
+
 struct App {
     /// our key and its pubkey. it only changes when an nsec is imported
     identity: RwLock<(SecretKey, PubKey)>,
@@ -80,6 +88,8 @@ struct App {
     current_profile: Mutex<Option<PubKey>>,
     /// held while quoting prices, so a quote isn't sent twice
     quoting: Mutex<()>,
+    /// what we sent since the relay report popup was last closed, and the id for the next one
+    sent: Mutex<(Vec<Sent>, u64)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -129,6 +139,7 @@ fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
         current_trade: Mutex::new(None),
         current_profile: Mutex::new(None),
         quoting: Mutex::new(()),
+        sent: Mutex::new((vec![], 0)),
     });
 
     setup_ui(&app, &ui);
@@ -391,6 +402,21 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
         a.relays_changed();
     });
 
+    let a = app.clone();
+    ui.on_close_sent(move || {
+        a.sent.lock().unwrap().0.clear();
+        if let Some(ui) = a.ui.upgrade() {
+            ui.set_sent_open(false);
+        }
+    });
+
+    ui.on_open_relay_site(|host| {
+        let url = format!("http://{host}");
+        if let Err(err) = webbrowser::open(&url) {
+            log::warn!("failed to open {url}: {err}");
+        }
+    });
+
     ui.on_open_docs(|| {
         if let Err(err) = webbrowser::open(DOCS_URL) {
             log::warn!("failed to open {DOCS_URL}: {err}");
@@ -553,22 +579,110 @@ impl App {
         events
     }
 
-    /// returns the relays that accepted it, and how many we tried
-    async fn publish(&self, relays: Vec<String>, evt: Event) -> (Vec<String>, usize) {
+    /// returns the relays that accepted it, and how many we tried.
+    /// each relay's answer shows up in the relay report popup under `title` as it arrives.
+    async fn publish(&self, title: &str, relays: Vec<String>, evt: Event) -> (Vec<String>, usize) {
         let total = relays.len();
+        // publish_many skips invalid urls without a word, so catch them here, and use the same
+        // normalized urls it reports back with
+        let mut urls = vec![];
+        let mut answers = vec![];
+        for relay in &relays {
+            match ritualistic::normalize_url(relay) {
+                Ok(url) => {
+                    urls.push(url.to_string());
+                    answers.push((url.to_string(), None));
+                }
+                Err(err) => answers.push((relay.clone(), Some(Err(format!("invalid url: {err}"))))),
+            }
+        }
+        let id = {
+            let mut sent = self.sent.lock().unwrap();
+            let id = sent.1;
+            sent.1 += 1;
+            sent.0.push(Sent {
+                id,
+                title: title.to_string(),
+                answers,
+            });
+            id
+        };
+        self.render_sent(true);
+
         let mut results = self
             .net
             .clone()
-            .publish_many(&relays, evt, PublishOptions::default())
+            .publish_many(&urls, evt, PublishOptions::default())
             .await;
         let mut ok = vec![];
         while let Some(res) = results.recv().await {
-            match res.error {
-                None => ok.push(res.relay_url.to_string()),
-                Some(err) => log::warn!("publish to {} failed: {err}", res.relay_url),
+            let answer = match res.error {
+                None => {
+                    ok.push(res.relay_url.clone());
+                    Ok(())
+                }
+                Some(err) => {
+                    log::warn!("publish to {} failed: {err}", res.relay_url);
+                    Err(err)
+                }
+            };
+            {
+                // gone if the popup was closed in the meantime
+                let mut sent = self.sent.lock().unwrap();
+                if let Some(slot) = sent
+                    .0
+                    .iter_mut()
+                    .find(|s| s.id == id)
+                    .and_then(|s| {
+                        s.answers
+                            .iter_mut()
+                            .find(|(url, a)| *url == res.relay_url && a.is_none())
+                    })
+                {
+                    slot.1 = Some(answer);
+                }
             }
+            self.render_sent(false);
         }
         (ok, total)
+    }
+
+    /// fill the relay report popup, opening it if `open`
+    fn render_sent(&self, open: bool) {
+        let sent = self.sent.lock().unwrap().0.clone();
+        let _ = self.ui.upgrade_in_event_loop(move |ui| {
+            let items: Vec<SentItem> = sent
+                .iter()
+                .map(|s| {
+                    let answers: Vec<RelayAnswer> = s
+                        .answers
+                        .iter()
+                        .map(|(url, answer)| RelayAnswer {
+                            url: url.into(),
+                            host: relay_host(url).into(),
+                            state: match answer {
+                                None => "sending",
+                                Some(Ok(())) => "ok",
+                                Some(Err(_)) => "failed",
+                            }
+                            .into(),
+                            error: match answer {
+                                Some(Err(err)) => err.into(),
+                                _ => "".into(),
+                            },
+                        })
+                        .collect();
+                    SentItem {
+                        title: s.title.clone().into(),
+                        answers: ModelRc::new(VecModel::from(answers)),
+                    }
+                })
+                .collect();
+            ui.set_sent(ModelRc::new(VecModel::from(items)));
+            if open {
+                ui.set_sent_open(true);
+            }
+        });
     }
 
     /// keep a filter open on each relay, reconnecting forever, calling `on_event` once per event
@@ -985,7 +1099,7 @@ impl App {
         let app = self.clone();
         tokio::spawn(async move {
             let id = evt.id;
-            let (ok, total) = app.publish(app.app_relays(), evt).await;
+            let (ok, total) = app.publish("offer", app.app_relays(), evt).await;
             app.status(format!("offer published to {}/{total} relays", ok.len()));
             let mut store = app.store.lock().unwrap();
             if let Some(o) = store.state.my_offers.iter_mut().find(|o| o.event.id == id) {
@@ -1046,7 +1160,7 @@ impl App {
         let evt = deletion(&self.sk(), &mine.event.id, KIND_OFFER);
         let app = self.clone();
         tokio::spawn(async move {
-            let (ok, total) = app.publish(relays, evt).await;
+            let (ok, total) = app.publish("offer deletion", relays, evt).await;
             app.status(format!("offer deleted from {}/{total} relays", ok.len()));
         });
     }
@@ -1269,7 +1383,7 @@ impl App {
         let evt = ping(&self.sk(), &peer);
         let app = self.clone();
         tokio::spawn(async move {
-            app.publish(relays, evt).await;
+            app.publish("ping", relays, evt).await;
         });
     }
 
@@ -1614,7 +1728,7 @@ impl App {
                 // give the other side a moment to open the conversation subscription
                 tokio::time::sleep(Duration::from_millis(1500)).await;
             }
-            let (ok, total) = app.publish(relays, evt).await;
+            let (ok, total) = app.publish("message", relays, evt).await;
             if ok.is_empty() {
                 app.status(format!("message failed to reach any of {total} relays"));
             }
@@ -1964,7 +2078,7 @@ impl App {
 
         let app = self.clone();
         tokio::spawn(async move {
-            let (ok, total) = app.publish(app.app_relays(), evt).await;
+            let (ok, total) = app.publish("trade report", app.app_relays(), evt).await;
             app.status(format!(
                 "trade report published to {}/{total} relays",
                 ok.len()
@@ -2253,6 +2367,12 @@ fn split_list(s: &str) -> Vec<String> {
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
         .collect()
+}
+
+/// the host (and port) of a relay url, which is also where its website usually is
+fn relay_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split('/').next().unwrap_or(rest)
 }
 
 fn display_name(labels: &BTreeMap<String, String>, pk: &PubKey) -> String {

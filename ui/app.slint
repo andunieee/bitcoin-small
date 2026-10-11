@@ -100,6 +100,20 @@ export struct RelayItem {
     enabled: bool,
 }
 
+/// what one relay answered to something we sent. state is "sending", "ok" or "failed"
+export struct RelayAnswer {
+    url: string,
+    host: string,
+    state: string,
+    error: string,
+}
+
+/// one thing we sent and how each relay took it
+export struct SentItem {
+    title: string,
+    answers: [RelayAnswer],
+}
+
 export struct PayItem {
     name: string,
     checked: bool,
@@ -603,6 +617,12 @@ export component AppWindow inherits Window {
     callback reveal-nsec();
     callback open-docs();
     callback import-nsec(string);
+
+    // relay report popup, shown whenever something is sent to relays
+    in property <[SentItem]> sent;
+    in property <bool> sent-open;
+    callback close-sent();
+    callback open-relay-site(string);
 
     // on wide screens the content stays in a column of at most this width, centered by the stretch-0 spacers around it
     property <length> max-content-width: 1200px;
@@ -1857,6 +1877,83 @@ export component AppWindow inherits Window {
 
             Rectangle {
                 horizontal-stretch: 0;
+            }
+        }
+    }
+    // relay report popup, over everything else
+    if root.sent-open: Rectangle {
+        background: #00000088;
+        // swallow clicks so nothing underneath reacts
+        TouchArea {
+            clicked => {
+                root.close-sent();
+            }
+        }
+
+        Card {
+            width: min(root.width - 32px, 480px);
+            height: min(root.height - 32px - root.safe-area-insets.top - root.safe-area-insets.bottom, 520px);
+            background: Palette.background;
+            // keep clicks on the card from closing it
+            TouchArea { }
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 8px;
+                Title {
+                    text: "Relays";
+                }
+
+                ScrollView {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 12px;
+                        for item in root.sent: VerticalLayout {
+                            spacing: 4px;
+                            Text {
+                                text: item.title;
+                                font-weight: 700;
+                                wrap: word-wrap;
+                            }
+
+                            for answer in item.answers: HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    width: 16px;
+                                    text: answer.state == "ok" ? "✓" : answer.state == "failed" ? "✗" : "…";
+                                    color: answer.state == "ok" ? #2e9e44 : answer.state == "failed" ? #d33 : Palette.foreground;
+                                    font-weight: 700;
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: answer.host;
+                                        color: #f7931a;
+                                        overflow: elide;
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.open-relay-site(answer.host);
+                                            }
+                                        }
+                                    }
+
+                                    if answer.error != "": Muted {
+                                        text: answer.error;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Button {
+                    text: "Close";
+                    clicked => {
+                        root.close-sent();
+                    }
+                }
             }
         }
     }

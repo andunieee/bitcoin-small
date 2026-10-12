@@ -68,7 +68,11 @@ impl OfferTerms {
     }
 
     pub fn my_role(&self) -> Role {
-        if self.mine { Role::Maker } else { Role::Taker }
+        if self.mine {
+            Role::Maker
+        } else {
+            Role::Taker
+        }
     }
 
     /// whoever ends up with the bitcoin. the other one ends up with the fiat.
@@ -457,7 +461,7 @@ mod tests {
             Action::Amount(50.5),
             Action::Price(61234.56),
             Action::BitcoinMethod("lightning".into()),
-            Action::PaymentMethod("PIX".into()),
+            Action::PaymentMethod("UPI".into()),
             Action::BitcoinDetails("lnbc1…".into()),
             Action::PaymentDetails("iban\nname".into()),
             Action::Sent,

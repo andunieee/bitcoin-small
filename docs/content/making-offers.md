@@ -34,6 +34,10 @@ One is enough, as long as the people you want to reach read from it.
 
 The form remembers what you picked in your last few offers, so the next offer is usually one tap away.
 
+<div class="shots one">
+  <img src="../screenshots/new-offer.png" alt="the new offer form">
+</div>
+
 ## After publishing
 
 Your offer stays up for **3 hours**, then disappears on its own. To keep trading, publish it again. You can close it
@@ -41,6 +45,10 @@ earlier from **Trades → Your open offers**.
 
 When someone answers, a new chat appears under **Trades → Ongoing**. Check their history before agreeing to anything,
 exactly as you would when [taking an offer](../taking-offers/). You don't have to trade with everyone who writes to you.
+
+<div class="shots one">
+  <img src="../screenshots/trades.png" alt="your open offers, ongoing trades and history">
+</div>
 
 ## Your offer is public
 

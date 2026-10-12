@@ -5,6 +5,12 @@ A tiny peer-to-peer market for exchanging bitcoin and fiat over nostr.
 There is **no escrow, no arbiter, no usernames and no server**. Every trade is based on trust alone. Start with
 ridiculously small amounts, like $2. Build a history of trades, increase the amounts slowly, and never go too high.
 
+<p>
+  <img src="docs/static/screenshots/market.png" width="260" alt="the market">
+  <img src="docs/static/screenshots/trade.png" width="260" alt="a trade in progress">
+  <img src="docs/static/screenshots/profile.png" width="260" alt="a profile with trade reports">
+</p>
+
 The user guide lives in `docs/` and is published to <https://andunieee.github.io/bitcoin-smol/> on every push to
 `master` (`zola --root docs serve` to preview it). This README is about the protocol and the code.
 
@@ -12,7 +18,7 @@ The user guide lives in `docs/` and is published to <https://andunieee.github.io
 
 ### Identity
 
-The app generates a nostr secret key on first launch (`ritualistic::SecretKey::generate()`) and stores it on the device.
+The app generates a nostr secret key on first launch and stores it on the device.
 Your npub is your only identity. Offers carry no username or profile, only the npub that signed them. You can reveal the
 nsec in Settings to back it up, or import an nsec you used before. Importing is refused while there are open offers or
 ongoing trades, since those belong to the current key. The replaced key is kept as `key.<pubkey>.old`.
@@ -45,7 +51,7 @@ conditions. The terms go in tags:
 
 - **`side`** isn't in the original list of terms, but an offer means nothing without it. It is always from the maker's
   point of view.
-- **`currency`**: the app hardcodes a list of currencies (USD, EUR, GBP, BRL, ARS, VES, MXN, …).
+- **`currency`**: the app hardcodes a list of currencies (USD, EUR, GBP, MXN, ARS, VES, COP, …).
 - **`price_api`**: each currency lists the APIs that can quote it, and the app has a fetch function for each:
   `coingecko`, `yadio`, `kraken`, `bitstamp` and `mempool` (see `src/prices.rs`). Clients that don't know an API id
   show the offer with an "unknown price api" warning.
@@ -55,7 +61,7 @@ conditions. The terms go in tags:
   decimal numbers and min can't be more than max; equal values (or a single value) mean a fixed amount. Offers
   without it are ignored.
 - **`payment`**: free-form. The app offers a hardcoded list similar to RoboSats (Revolut, Wise, Zelle, Strike, SEPA,
-  PIX, Mercado Pago, M-Pesa, gift cards, Cash F2F, …) plus a text field for anything else.
+  UPI, Mercado Pago, M-Pesa, gift cards, Cash F2F, …) plus a text field for anything else.
 - **`bitcoin`**: how the maker accepts or sends bitcoin. The app offers `onchain`, `rootstock`, `lightning`, `cassis`,
   `arkade` and `liquid`, and requires at least one. These only show in the focused offer view, not in the offer list.
 - **`relay`**: the relays where the taker and maker exchange DMs about this offer.
@@ -123,7 +129,7 @@ That gives the other side time to subscribe.
 
 ### Labels
 
-You can give anyone a label from their profile, such as "fast PIX guy" or "alice from the meetup". Labels are stored
+You can give anyone a label from their profile, such as "fast UPI guy" or "alice from the meetup". Labels are stored
 only on your device and never published. A labeled key shows its label in the order book, in your trades and in trade
 reports, and the People tab lists everyone you labeled, with a search.
 
@@ -140,6 +146,8 @@ ones. When a trade is over you can:
 - **conclude** it, which publishes a trade report (below),
 - **archive** it, which keeps it in your history without a report,
 - or **delete** it, which forgets it.
+
+![a trade on a wide screen: the chat, with the state of the deal next to it](docs/static/screenshots/trade-wide.png)
 
 Ending a trade stops the app from listening to that conversation. If the same person starts a new trade later, it
 only shows messages from after it started. DMs stay on relays for 30 days, so older ones would otherwise come back.
@@ -169,31 +177,16 @@ says so, and the maker sends theirs after that. Each value is set once. Actions 
 or outside the offer's terms are ignored. The maker learns which offer the trade is about from the `e` tag on the
 taker's messages.
 
-### Local storage
-
-Everything is in the app's data directory:
-
-- `key`: your secret key.
-- `state.json`: settings, labels, your open offers and the relays that took them, ongoing trades with their messages,
-  and the last few offers you made, used to fill the new offer form. It is loaded into memory on startup.
-- `history.redb`: past trades, concluded or archived, in [redb](https://www.redb.org).
-- `events.redb`: trade reports, yours and other people's.
-
-In the browser, `key` and `state.json` go to localStorage under `bitcoin-smol/`, and the two redb databases to the
-origin private file system, through `ritualistic::OpfsBackend`. They are held in memory and saved in the background
-after each commit, so closing the tab right after a change can lose it.
-
 ### Trade reports (kinds `8022` and `8020`)
 
 When a trade is over, either party can publish a report about the other:
 
 ```jsonc
-{ "kind": 8022, "tags": [["p", "<other party>"]], "content": "$5 via PIX, fast" }  // success
+{ "kind": 8022, "tags": [["p", "<other party>"]], "content": "$5 via UPI, fast" }  // success
 { "kind": 8020, "tags": [["p", "<other party>"]], "content": "never paid" }        // failure
 ```
 
-Reports are signed with your real key. The app stores them in a local event database (ritualistic's redb store) and
-publishes them to your current app relays.
+Reports are signed with your real key. The app stores them in a local event database and publishes them to current app relays.
 
 ### Deciding who to trust
 
@@ -220,6 +213,7 @@ with a newcomer.
 | `src/deal.rs`     | structured trade messages, and the state of a deal replayed from them                                                   |
 | `src/history.rs`  | past trades, in redb                                                                                                    |
 | `src/app.rs`      | relay subscriptions, publishing, and the glue to the UI                                                                 |
+| `src/app/screenshots.rs` | renders the screenshots in `docs/static/screenshots` offscreen, over made-up data                                |
 | `ui/app.slint`    | the interface: market, offer, new offer, trades, trade, profile, people, settings                                       |
 | `src/lib.rs`      | Android entry point (`android_main`)                                                                                    |
 | `src/main.rs`     | desktop entry point, and the web entry point when built for wasm                                                        |
@@ -233,6 +227,10 @@ On the desktop, for development:
 cargo run                 # data goes in ~/.local/share/bitcoin-smol (%APPDATA% on windows), or set $BITCOIN_SMOL_DATA
 cargo test
 ```
+
+The screenshots in `docs/static/screenshots` come from the real UI, rendered offscreen by Slint's software renderer
+over made-up offers, trades and reports, with nothing sent to the network. Run `just screenshots` to update them
+after changing the UI.
 
 For Android you need the Android SDK and NDK (`ANDROID_HOME` and `ANDROID_NDK_ROOT` set) and
 [cargo-apk](https://crates.io/crates/cargo-apk):

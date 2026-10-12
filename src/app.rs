@@ -31,6 +31,9 @@ const TRADE_START_SLACK: u32 = 5 * 60;
 /// how many past trades the trades tab lists
 const PAST_TRADES_SHOWN: usize = 30;
 
+#[cfg(feature = "screenshots")]
+pub(crate) mod screenshots;
+
 /// the user guide, built from docs/ by .github/workflows/pages.yml
 const DOCS_URL: &str = "https://andunieee.github.io/bitcoin-smol/";
 
@@ -90,6 +93,8 @@ struct App {
     quoting: Mutex<()>,
     /// what we sent since the relay report popup was last closed, and the id for the next one
     sent: Mutex<(Vec<Sent>, u64)>,
+    /// for the screenshots: nothing is fetched, published or subscribed to
+    offline: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -120,29 +125,7 @@ pub async fn run() -> Result<(), slint::PlatformError> {
 }
 
 fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
-    let sk = crate::store::load_or_create_key(&*store.files);
-    let ui = AppWindow::new()?;
-
-    let app = Arc::new(App {
-        identity: RwLock::new((sk.clone(), sk.pubkey())),
-        net: Network::new(),
-        ui: ui.as_weak(),
-        store: Mutex::new(store),
-        offers: Mutex::new(vec![]),
-        prices: Mutex::new(HashMap::new()),
-        price_errors: Mutex::new(HashMap::new()),
-        form_pair: Mutex::new(Default::default()),
-        locale_currency: form::locale_currency(),
-        filters: Mutex::new(("all".into(), "all".into())),
-        ping_sub: Mutex::new(None),
-        dm_subs: Mutex::new(HashMap::new()),
-        current_trade: Mutex::new(None),
-        current_profile: Mutex::new(None),
-        quoting: Mutex::new(()),
-        sent: Mutex::new((vec![], 0)),
-    });
-
-    setup_ui(&app, &ui);
+    let (ui, app) = build(store, false)?;
 
     app.restart_ping_sub();
     let peers: Vec<String> = app
@@ -170,6 +153,35 @@ fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
     });
 
     Ok(ui)
+}
+
+/// the window and the app behind it, before anything goes to the network
+fn build(store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::PlatformError> {
+    let sk = crate::store::load_or_create_key(&*store.files);
+    let ui = AppWindow::new()?;
+
+    let app = Arc::new(App {
+        identity: RwLock::new((sk.clone(), sk.pubkey())),
+        net: Network::new(),
+        ui: ui.as_weak(),
+        store: Mutex::new(store),
+        offers: Mutex::new(vec![]),
+        prices: Mutex::new(HashMap::new()),
+        price_errors: Mutex::new(HashMap::new()),
+        form_pair: Mutex::new(Default::default()),
+        locale_currency: form::locale_currency(),
+        filters: Mutex::new(("all".into(), "all".into())),
+        ping_sub: Mutex::new(None),
+        dm_subs: Mutex::new(HashMap::new()),
+        current_trade: Mutex::new(None),
+        current_profile: Mutex::new(None),
+        quoting: Mutex::new(()),
+        sent: Mutex::new((vec![], 0)),
+        offline,
+    });
+
+    setup_ui(&app, &ui);
+    Ok((ui, app))
 }
 
 fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
@@ -558,7 +570,7 @@ impl App {
     /// query relays until all of them send EOSE or a timeout, keeping whatever arrived
     async fn fetch(&self, relays: Vec<String>, filter: Filter) -> Vec<Event> {
         let mut events = vec![];
-        if relays.is_empty() {
+        if relays.is_empty() || self.offline {
             return events;
         }
         let mut sub = self
@@ -583,6 +595,9 @@ impl App {
     /// each relay's answer shows up in the relay report popup under `title` as it arrives.
     async fn publish(&self, title: &str, relays: Vec<String>, evt: Event) -> (Vec<String>, usize) {
         let total = relays.len();
+        if self.offline {
+            return (vec![], total);
+        }
         // publish_many skips invalid urls without a word, so catch them here, and use the same
         // normalized urls it reports back with
         let mut urls = vec![];
@@ -692,6 +707,9 @@ impl App {
         filter: Filter,
         on_event: impl Fn(&Arc<App>, Event) + Send + Sync + 'static,
     ) -> LiveSub {
+        if self.offline {
+            return LiveSub(vec![]);
+        }
         let on_event = Arc::new(on_event);
         let seen = Arc::new(Mutex::new(HashSet::<ID>::new()));
         let handles = relays
@@ -814,6 +832,9 @@ impl App {
     }
 
     async fn fetch_pairs(self: &Arc<Self>, pairs: HashSet<(String, String)>) {
+        if self.offline {
+            return;
+        }
         let handles: Vec<_> = pairs
             .into_iter()
             .filter_map(|(cur, api_id)| {
@@ -2417,6 +2438,6 @@ mod tests {
     #[test]
     fn amount_range() {
         assert_eq!(super::amount_range(20.0, 1500.5, "USD"), "20–1,500.50 USD");
-        assert_eq!(super::amount_range(50.0, 50.0, "BRL"), "50 BRL");
+        assert_eq!(super::amount_range(50.0, 50.0, "MXN"), "50 MXN");
     }
 }

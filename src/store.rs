@@ -14,15 +14,10 @@ use crate::form::OfferTemplate;
 use crate::history::History;
 use crate::protocol::{KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS};
 
-pub const DEFAULT_RELAYS: &[&str] = &[
-    "wss://nostr.land",
-    "wss://nostr21.com",
-    "wss://nostr.wine",
-    "wss://eden.nostr.land",
-    "wss://atlas.nostr.land",
-    "wss://relay.nostrplebs.com",
-    "wss://nostr.plebchain.org",
-];
+#[cfg(not(debug_assertions))]
+pub const DEFAULT_RELAYS: &[&str] = &["wss://nostr.wine"];
+#[cfg(debug_assertions)]
+pub const DEFAULT_RELAYS: &[&str] = &["wss://nostr.wine", "wss://nos.lol", "wss://relay.primal.net"];
 
 /// how many of our own reports about someone are enough to not ask anyone else
 pub const ENOUGH_OWN_REPORTS: usize = 20;

@@ -807,6 +807,7 @@ export component AppWindow inherits Window {
 
                 // ---------------------------------------------------------------- offer detail
                 if root.page == 1: sv1 := ScrollView {
+                    viewport-width: self.visible-width;
                     VerticalLayout {
                         width: sv1.visible-width;
                         padding: 16px;
@@ -821,10 +822,6 @@ export component AppWindow inherits Window {
                             Title {
                                 text: "bitcoin for " + root.current-offer.currency;
                             }
-                        }
-
-                        Muted {
-                            text: root.current-offer.side == "sell" ? "the maker sells bitcoin and receives fiat" : "the maker buys bitcoin and pays fiat";
                         }
 
                         Card {
@@ -905,9 +902,6 @@ export component AppWindow inherits Window {
                                 root.contact-maker(root.current-offer.id);
                             }
                         }
-                        if root.current-offer.mine: Muted {
-                            text: "this is your offer. takers will show up in Trades.";
-                        }
                         if root.current-offer.mine: Button {
                             text: "Close offer";
                             clicked => {
@@ -920,6 +914,7 @@ export component AppWindow inherits Window {
 
                 // ---------------------------------------------------------------- create
                 if root.page == 2: sv2 := ScrollView {
+                    viewport-width: self.visible-width;
                     VerticalLayout {
                         width: sv2.visible-width;
                         padding: 16px;
@@ -927,10 +922,6 @@ export component AppWindow inherits Window {
                         alignment: start;
                         Title {
                             text: "New offer";
-                        }
-
-                        Muted {
-                            text: "offers expire after 3 hours. they carry only your npub, no username. the form remembers what you usually pick.";
                         }
 
                         HorizontalLayout {
@@ -980,10 +971,6 @@ export component AppWindow inherits Window {
                         }
 
                         Muted {
-                            text: "\"+1%\" means bitcoin goes 1% more expensive than the market price; empty means 0%.";
-                        }
-
-                        Muted {
                             text: root.create-preview;
                         }
 
@@ -1025,10 +1012,6 @@ export component AppWindow inherits Window {
                                 text: root.create-currency;
                                 vertical-alignment: center;
                             }
-                        }
-
-                        Muted {
-                            text: "setting min and max to the same value makes it an exact amount offer.";
                         }
 
                         Text {
@@ -1182,6 +1165,7 @@ export component AppWindow inherits Window {
 
                 // ---------------------------------------------------------------- trades
                 if root.page == 3: sv3 := ScrollView {
+                    viewport-width: self.visible-width;
                     VerticalLayout {
                         width: sv3.visible-width;
                         padding: 16px;
@@ -1192,7 +1176,7 @@ export component AppWindow inherits Window {
                         }
 
                         if root.my-offers.length == 0: Muted {
-                            text: "none. offers last 3 hours.";
+                            text: "none.";
                         }
                         for offer in root.my-offers: Card {
                             HorizontalLayout {
@@ -1365,15 +1349,14 @@ export component AppWindow inherits Window {
                                 }
                             }
 
-                            Muted {
-                                text: "this publishes a trade report about them to your relays and moves the trade to your history. use Archive to put it away without a report.";
-                            }
                         }
                     }
 
                     // on wide screens the deal sits next to the chat, otherwise above it
                     if root.deal.active && !root.trade-wide: sv-deal-top := ScrollView {
                         height: min(dp-top.preferred-height, root.height * 0.45);
+                        // long unbreakable values, like an invoice, would widen it and push the panel sideways
+                        viewport-width: self.visible-width;
                         VerticalLayout {
                             width: sv-deal-top.visible-width;
                             padding-right: 6px;
@@ -1459,6 +1442,7 @@ export component AppWindow inherits Window {
 
                         if root.deal.active && root.trade-wide: sv-deal := ScrollView {
                             width: 340px;
+                            viewport-width: self.visible-width;
                             VerticalLayout {
                                 width: sv-deal.visible-width;
                                 padding-right: 6px;
@@ -1492,6 +1476,7 @@ export component AppWindow inherits Window {
 
                 // ---------------------------------------------------------------- profile
                 if root.page == 5: sv5 := ScrollView {
+                    viewport-width: self.visible-width;
                     VerticalLayout {
                         width: sv5.visible-width;
                         padding: 16px;
@@ -1636,9 +1621,6 @@ export component AppWindow inherits Window {
                                 }
                             }
 
-                            Muted {
-                                text: "reports are public, kept on this device and published to your current relays.";
-                            }
                         }
                     }
                 }
@@ -1649,10 +1631,6 @@ export component AppWindow inherits Window {
                     spacing: 8px;
                     Title {
                         text: "People";
-                    }
-
-                    Muted {
-                        text: "everyone you labeled. labels are kept only on this device, never published. label someone from their profile.";
                     }
 
                     LineEdit {
@@ -1697,6 +1675,7 @@ export component AppWindow inherits Window {
 
                 // ---------------------------------------------------------------- settings
                 if root.page == 6: sv6 := ScrollView {
+                    viewport-width: self.visible-width;
                     VerticalLayout {
                         width: sv6.visible-width;
                         padding: 16px;
@@ -1704,10 +1683,6 @@ export component AppWindow inherits Window {
                         alignment: start;
                         Title {
                             text: "Your key";
-                        }
-
-                        Muted {
-                            text: "generated automatically on first launch. this npub is your only identity here.";
                         }
 
                         LineEdit {
@@ -1741,10 +1716,6 @@ export component AppWindow inherits Window {
                             text: "Import a key";
                         }
 
-                        Muted {
-                            text: "use an nsec you had before. this brings back that identity and its reputation, but not its trades or messages, which stay on the device they happened on. your current key is kept on this device as a backup.";
-                        }
-
                         HorizontalLayout {
                             spacing: 8px;
                             import-field := LineEdit {
@@ -1763,10 +1734,6 @@ export component AppWindow inherits Window {
                         }
                         Title {
                             text: "Relays";
-                        }
-
-                        Muted {
-                            text: "used to find offers, publish your offers and trade reports. paid relays only accept writes from paying users; switch to whatever relays you can use.";
                         }
 
                         for relay in root.relays: HorizontalLayout {

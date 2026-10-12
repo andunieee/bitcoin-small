@@ -1,7 +1,7 @@
 # build a debug apk for arm64 and install it on the connected device, without launching it.
 # it's signed with release.jks (gitignored, password in release.jks.password), the same key as
 # the github releases, so either can be installed over the other.
-installDebug:
+android-install:
     #!/usr/bin/env bash
     set -euo pipefail
     export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
@@ -21,3 +21,7 @@ desktop:
 # serve the web build on http://127.0.0.1:8080, rebuilding on changes
 web:
     trunk serve web/index.html
+
+# render the screenshots for the readme and the user guide into docs/static/screenshots
+screenshots:
+    cargo run --release --features screenshots --bin screenshots

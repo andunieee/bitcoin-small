@@ -9,6 +9,8 @@ pub mod store;
 slint::include_modules!();
 
 pub use app::run;
+#[cfg(feature = "screenshots")]
+pub use app::screenshots::run as screenshots;
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]

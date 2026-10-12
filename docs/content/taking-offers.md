@@ -16,6 +16,11 @@ Each offer shows:
 - **bitcoin via**: how the bitcoin side is sent, like lightning, onchain or liquid.
 - **a description**: limits, hours or conditions, in the maker's own words.
 
+<div class="shots">
+  <img src="../screenshots/market.png" alt="the market">
+  <img src="../screenshots/offer.png" alt="an offer, opened">
+</div>
+
 ## Before you contact anyone
 
 Open the offer and check **the maker's trade history**. It shows what you said about them in past trades, and what
@@ -34,6 +39,10 @@ to happen next:
 3. **you, the taker, send first**, and tap the button saying so. Then the maker sends their part.
 
 Each of these sends a message in the chat, so the other side sees it too.
+
+<div class="shots one">
+  <img src="../screenshots/trade.png" alt="a trade where everything is agreed and it is the taker's turn to send the money">
+</div>
 
 Once you pick the amount, the maker's app answers with the price: the market price from the offer's source plus its
 premium. From then on that price is fixed for the trade, and it decides how many sats the amount is. Your app checks

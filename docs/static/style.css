@@ -59,3 +59,17 @@ footer {
   font-size: 0.9rem;
 }
 footer a { color: var(--muted); }
+.shots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 20px 0;
+}
+.shots img {
+  width: 100%;
+  max-width: 220px;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.shots.one img { max-width: 260px; }

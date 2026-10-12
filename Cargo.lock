@@ -616,6 +616,7 @@ dependencies = [
  "env_logger",
  "js-sys",
  "log",
+ "png",
  "redb",
  "reqwest",
  "ritualistic",

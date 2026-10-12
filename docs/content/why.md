@@ -51,3 +51,29 @@ That makes bitcoin-smol a good fit for:
 - getting your first few dollars of bitcoin,
 - topping up or spending without involving a bank or an exchange,
 - regular trades with people you have come to know.
+
+## Compared to Bisq, RoboSats and Vexl
+
+bitcoin-smol sits somewhere between [Bisq](https://bisq.network) and [RoboSats](https://learn.robosats.com) on one
+side and [Vexl](https://vexl.it) on the other.
+
+Its goals are closest to Vexl's: you trade with people you trust, or with people that people you trust have traded
+with. But Vexl finds them through your phone contacts, so it works best if you already know bitcoiners. bitcoin-smol
+also works if you don't: you can meet strangers online and, trade by trade, find out which of them are trustworthy.
+
+Finding strangers to trade with is what Bisq and RoboSats are for too. They do it by keeping trust and reputation out
+of the picture on purpose, with escrow, deposits, arbitrators and timeouts, and that is why they are so cumbersome to
+use. bitcoin-smol lets trust do that work instead.
+
+It is also different in a few practical ways:
+
+- **No one to close shop.** It isn't tied to a company that can shut down tomorrow, a group of volunteers who must
+  keep the infrastructure running, or a DAO that insists on its own token. It's an app and some nostr relays, and
+  there are plenty of relays to pick from.
+- **Light and fast.** It loads instantly and runs in the browser, on desktop and on phones. There is no heavy Java
+  desktop app eating your computer's resources, so it works fine on a cheap phone or an old laptop.
+- **No Tor needed.** Relays see your IP address, like any website. If you'd rather they didn't, a VPN is usually
+  enough, and Tor works too. See [Privacy](../privacy/).
+- **Easy to automate.** Everything, including each step of a trade, is a nostr message, and the steps carry
+  structured data. So a maker can script the routine parts, or hand them to an LLM agent, instead of clicking buttons
+  in an app all day. The fiat side may still need a human to check that the money arrived.

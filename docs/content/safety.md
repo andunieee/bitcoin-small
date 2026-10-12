@@ -40,6 +40,10 @@ When you open someone's profile, you see:
 2. **What the people you trust say**: if you have fewer than 20 reports of your own about them, the app asks the 10
    people you have reported the most successful trades with, and shows what they wrote about this person.
 
+<div class="shots one">
+  <img src="../screenshots/profile.png" alt="a profile: your own reports about them, then what the people you trust said">
+</div>
+
 This is why reporting matters. Every successful trade you conclude can bring someone into the circle the app asks
 later. Reports from people outside that circle are never shown, so fake accounts praising each other don't count for
 you.
@@ -53,3 +57,7 @@ person's profile: you won't see their offers or hear from them again.
 
 Give people a label from their profile, like "fast GCash, met at the meetup". Only you see labels. The **People** tab
 lists everyone you labeled.
+
+<div class="shots one">
+  <img src="../screenshots/people.png" alt="the People tab">
+</div>

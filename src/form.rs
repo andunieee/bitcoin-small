@@ -5,16 +5,14 @@
 use std::collections::HashMap;
 
 use crate::prices;
-use crate::protocol::{DEFAULT_BITCOIN_METHODS, payment_methods_for};
+use crate::protocol::{payment_methods_for, DEFAULT_BITCOIN_METHODS};
 
-/// free relays where people reach us about an offer. offers themselves go to the paid app relays,
-/// which is what makes identities cost something, but there is no reason the chat has to.
-pub const DEFAULT_NEGOTIATION_RELAYS: &[&str] = &[
-    "wss://relay.primal.net",
-    "wss://nos.lol",
-    "wss://nostr.mom",
-    "wss://relay.damus.io",
-];
+/// relays where people reach us about an offer.
+#[cfg(not(debug_assertions))]
+pub const DEFAULT_NEGOTIATION_RELAYS: &[&str] = &["wss://nostr.wine"];
+#[cfg(debug_assertions)]
+pub const DEFAULT_NEGOTIATION_RELAYS: &[&str] =
+    &["wss://nostr.wine", "wss://nos.lol", "wss://relay.primal.net"];
 
 /// how many of our past offers the form learns from
 pub const RECENT_OFFERS: usize = 5;
@@ -164,7 +162,7 @@ pub fn locale_currency() -> String {
         .into()
 }
 
-/// "pt-BR", "pt_BR.UTF-8" -> "BRL", as long as it is a currency we have prices for
+/// "es-MX", "es_MX.UTF-8" -> "MXN", as long as it is a currency we have prices for
 fn currency_for_locale(locale: &str) -> Option<&'static str> {
     let region = locale
         .split(['.', '@'])
@@ -269,8 +267,8 @@ mod tests {
 
     #[test]
     fn no_history() {
-        let d = defaults(&[], "BRL");
-        assert_eq!(d.currency, "BRL");
+        let d = defaults(&[], "MXN");
+        assert_eq!(d.currency, "MXN");
         assert_eq!(d.side, "sell");
         assert_eq!(d.premium, 0.0);
         assert_eq!(d.bitcoin_methods, vec!["onchain", "lightning", "arkade"]);
@@ -284,38 +282,43 @@ mod tests {
     #[test]
     fn learns_from_recent_offers() {
         let recent = vec![
-            tpl("BRL", 2.0, &["PIX"], &["lightning"]),
+            tpl("MXN", 2.0, &["Mercado Pago"], &["lightning"]),
             tpl("USD", 1.0, &["Zelle"], &["lightning", "onchain"]),
-            tpl("BRL", 0.0, &["PIX", "Nubank"], &["lightning", "liquid"]),
+            tpl(
+                "MXN",
+                0.0,
+                &["Mercado Pago", "Wise"],
+                &["lightning", "liquid"],
+            ),
         ];
         let d = defaults(&recent, "EUR");
-        assert_eq!(d.currency, "BRL");
+        assert_eq!(d.currency, "MXN");
         assert_eq!(d.premium, 1.0);
         assert_eq!(d.bitcoin_methods, vec!["lightning"]);
         assert_eq!(
-            default_payment_methods(&recent, "BRL"),
-            vec!["PIX", "Nubank"]
+            default_payment_methods(&recent, "MXN"),
+            vec!["Mercado Pago", "Wise"]
         );
         assert_eq!(default_payment_methods(&recent, "USD"), vec!["Zelle"]);
-        assert_eq!(default_api(&recent, "BRL"), "yadio");
+        assert_eq!(default_api(&recent, "MXN"), "yadio");
     }
 
     #[test]
     fn amount_from_the_same_currency() {
         let mut usd = tpl("USD", 0.0, &[], &[]);
         usd.amount = Some((20.0, 100.0));
-        let mut brl = tpl("BRL", 0.0, &[], &[]);
-        brl.amount = Some((50.0, 50.0));
-        let recent = vec![tpl("USD", 0.0, &[], &[]), usd, brl];
+        let mut mxn = tpl("MXN", 0.0, &[], &[]);
+        mxn.amount = Some((50.0, 50.0));
+        let recent = vec![tpl("USD", 0.0, &[], &[]), usd, mxn];
         assert_eq!(default_amount(&recent, "USD"), Some((20.0, 100.0)));
-        assert_eq!(default_amount(&recent, "BRL"), Some((50.0, 50.0)));
+        assert_eq!(default_amount(&recent, "MXN"), Some((50.0, 50.0)));
         assert_eq!(default_amount(&recent, "EUR"), None);
     }
 
     #[test]
     fn ties_go_to_the_most_recent() {
         let recent = vec![tpl("USD", 0.0, &[], &[]), tpl("EUR", 0.0, &[], &[])];
-        assert_eq!(defaults(&recent, "BRL").currency, "USD");
+        assert_eq!(defaults(&recent, "MXN").currency, "USD");
     }
 
     #[test]
@@ -331,7 +334,7 @@ mod tests {
             ),
             tpl_relays("USD", 0.0, &["Zelle"], &["arkade"], &["wss://y/"]),
         ];
-        let d = defaults(&recent, "BRL");
+        let d = defaults(&recent, "MXN");
         assert_eq!(d.relays, vec!["wss://x/", "wss://y/"]);
         // no method reaches a majority: repeat the last offer, not the hardcoded defaults
         assert_eq!(d.bitcoin_methods, vec!["liquid"]);
@@ -339,14 +342,14 @@ mod tests {
         assert_eq!(default_api(&recent, "EUR"), "yadio");
         assert_eq!(default_payment_methods(&recent, "EUR"), vec!["Strike"]);
         // old history without relays
-        let d = defaults(&[tpl("USD", 0.0, &[], &["onchain"])], "BRL");
+        let d = defaults(&[tpl("USD", 0.0, &[], &["onchain"])], "MXN");
         assert_eq!(d.relays, DEFAULT_NEGOTIATION_RELAYS);
     }
 
     #[test]
     fn locales() {
-        assert_eq!(currency_for_locale("pt-BR"), Some("BRL"));
-        assert_eq!(currency_for_locale("pt_BR.UTF-8"), Some("BRL"));
+        assert_eq!(currency_for_locale("es-MX"), Some("MXN"));
+        assert_eq!(currency_for_locale("es_MX.UTF-8"), Some("MXN"));
         assert_eq!(currency_for_locale("de-AT"), Some("EUR"));
         assert_eq!(currency_for_locale("zh-Hans-CN"), None);
         assert_eq!(currency_for_locale("en"), None);

@@ -17,7 +17,9 @@ use crate::form::{self, OfferTemplate};
 use crate::history::{Outcome, PastTrade};
 use crate::prices::{self, PriceApi, fiat, thousands};
 use crate::protocol::*;
-use crate::store::{ENOUGH_OWN_REPORTS, Message, MyOffer, Store, TRUSTED_PEERS_TO_ASK, Trade};
+use crate::store::{
+    DEFAULT_WRITE_RELAYS, ENOUGH_OWN_REPORTS, Message, MyOffer, Store, TRUSTED_PEERS_TO_ASK, Trade,
+};
 use crate::{
     AppWindow, DealRow, DealView, MsgItem, OfferItem, PayItem, PersonItem, RelayAnswer, RelayItem,
     ReportItem, SentItem, TradeItem, TradeView,
@@ -104,6 +106,8 @@ struct App {
     quoting: Mutex<()>,
     /// what we sent since the relay report popup was last closed, and the id for the next one
     sent: Mutex<(Vec<Sent>, u64)>,
+    /// held while looking up or creating our relay list, so we don't publish two
+    finding_write_relays: tokio::sync::Mutex<()>,
     /// for the screenshots: nothing is fetched, published or subscribed to
     offline: bool,
 }
@@ -190,6 +194,7 @@ fn build(store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::Pl
         current_profile: Mutex::new(None),
         quoting: Mutex::new(()),
         sent: Mutex::new((vec![], 0)),
+        finding_write_relays: tokio::sync::Mutex::new(()),
         offline,
     });
 
@@ -525,9 +530,15 @@ impl App {
             );
             return;
         }
-        if let Err(err) = self.store.lock().unwrap().replace_key(&self.sk(), &sk) {
-            self.status(format!("failed to save the key: {err}"));
-            return;
+        {
+            let mut store = self.store.lock().unwrap();
+            if let Err(err) = store.replace_key(&self.sk(), &sk) {
+                self.status(format!("failed to save the key: {err}"));
+                return;
+            }
+            // they belong to the old key, the new one may have its own relay list
+            store.state.write_relays = None;
+            store.persist();
         }
         *self.identity.write().unwrap() = (sk.clone(), sk.pubkey());
 
@@ -552,6 +563,74 @@ impl App {
 
     fn app_relays(&self) -> Vec<String> {
         self.store.lock().unwrap().state.app_relays.clone()
+    }
+
+    /// our write relays (nip-65). if we don't know them yet we look for our relay list, and if
+    /// there is none and `create`, we publish one with the default relays.
+    async fn my_write_relays(self: &Arc<Self>, create: bool) -> Vec<String> {
+        if let Some(relays) = &self.store.lock().unwrap().state.write_relays {
+            return relays.clone();
+        }
+        if self.offline {
+            return vec![];
+        }
+        let _finding = self.finding_write_relays.lock().await;
+        // found by whoever held the lock before us
+        if let Some(relays) = &self.store.lock().unwrap().state.write_relays {
+            return relays.clone();
+        }
+
+        let me = self.me();
+        let indexers: Vec<String> = INDEXER_RELAYS.iter().map(|r| r.to_string()).collect();
+        let lists = self
+            .fetch(
+                indexers.clone(),
+                Filter {
+                    kinds: Some(vec![KIND_RELAY_LIST]),
+                    authors: Some(vec![me]),
+                    ..Default::default()
+                },
+            )
+            .await;
+        let found = lists
+            .iter()
+            .filter(|e| e.pubkey == me && e.verify_signature())
+            .max_by_key(|e| e.created_at);
+        let relays = match found {
+            Some(list) => write_relays(list),
+            None => {
+                // nothing found because nobody answered isn't the same as having no relay list,
+                // and we don't want to replace one we couldn't see
+                let mut reachable = false;
+                for url in &indexers {
+                    if self.net.ensure_relay(url).await.is_ok() {
+                        reachable = true;
+                        break;
+                    }
+                }
+                if !reachable || !create {
+                    return vec![];
+                }
+                let relays: Vec<String> =
+                    DEFAULT_WRITE_RELAYS.iter().map(|r| r.to_string()).collect();
+                let evt = relay_list(&self.sk(), &relays);
+                let app = self.clone();
+                let to = merge_relays(&indexers, &relays);
+                tokio::spawn(async move {
+                    let (ok, total) = app.publish("relay list", to, evt).await;
+                    log::info!("relay list published to {}/{total} relays", ok.len());
+                });
+                relays
+            }
+        };
+        if self.me() != me {
+            // a key was imported in the meantime
+            return vec![];
+        }
+        let mut store = self.store.lock().unwrap();
+        store.state.write_relays = Some(relays.clone());
+        store.persist();
+        relays
     }
 
     fn label(&self, pk: &PubKey) -> String {
@@ -828,7 +907,8 @@ impl App {
     }
 
     /// one by one, look up the write relays (nip-65) of each person we trust, and their offers
-    /// there. these show up in the market as they arrive.
+    /// and trade reports there. the offers show up in the market as they arrive, the reports are
+    /// kept in the local database.
     async fn fetch_trusted_offers(self: &Arc<Self>) {
         let people = {
             let store = self.store.lock().unwrap();
@@ -860,17 +940,36 @@ impl App {
             }
 
             let since = Timestamp(now().0.saturating_sub(OFFER_TTL_SECS));
-            let events = self
-                .fetch(
-                    relays,
+            let (events, reports) = tokio::join!(
+                self.fetch(
+                    relays.clone(),
                     Filter {
                         kinds: Some(vec![KIND_OFFER]),
                         authors: Some(vec![pk]),
                         since: Some(since),
                         ..Default::default()
                     },
-                )
-                .await;
+                ),
+                self.fetch(
+                    relays,
+                    Filter {
+                        kinds: Some(vec![KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS]),
+                        authors: Some(vec![pk]),
+                        limit: Some(500),
+                        ..Default::default()
+                    },
+                ),
+            );
+            // their reports, for when we look at the people they traded with
+            {
+                let store = self.store.lock().unwrap();
+                for evt in reports
+                    .iter()
+                    .filter(|e| e.pubkey == pk && e.verify_signature())
+                {
+                    store.save_event(evt);
+                }
+            }
             let found: Vec<Offer> = self
                 .offers_from(&events, since)
                 .into_iter()
@@ -1226,7 +1325,8 @@ impl App {
         let app = self.clone();
         tokio::spawn(async move {
             let id = evt.id;
-            let (ok, total) = app.publish("offer", app.app_relays(), evt).await;
+            let relays = merge_relays(&app.app_relays(), &app.my_write_relays(true).await);
+            let (ok, total) = app.publish("offer", relays, evt).await;
             app.status(format!("offer published to {}/{total} relays", ok.len()));
             let mut store = app.store.lock().unwrap();
             if let Some(o) = store.state.my_offers.iter_mut().find(|o| o.event.id == id) {
@@ -2206,7 +2306,8 @@ impl App {
 
         let app = self.clone();
         tokio::spawn(async move {
-            let (ok, total) = app.publish("trade report", app.app_relays(), evt).await;
+            let relays = merge_relays(&app.app_relays(), &app.my_write_relays(false).await);
+            let (ok, total) = app.publish("trade report", relays, evt).await;
             app.status(format!(
                 "trade report published to {}/{total} relays",
                 ok.len()
@@ -2498,6 +2599,18 @@ fn split_list(s: &str) -> Vec<String> {
 }
 
 /// the host (and port) of a relay url, which is also where its website usually is
+/// `a` and then whatever of `b` isn't in it already, as normalized urls
+fn merge_relays(a: &[String], b: &[String]) -> Vec<String> {
+    let mut all: Vec<String> = vec![];
+    for r in a.iter().chain(b) {
+        let url = ritualistic::normalize_url(r).map_or_else(|_| r.clone(), |u| u.to_string());
+        if !all.contains(&url) {
+            all.push(url);
+        }
+    }
+    all
+}
+
 fn relay_host(url: &str) -> &str {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     rest.split('/').next().unwrap_or(rest)
@@ -2540,6 +2653,16 @@ mod tests {
     fn thousands() {
         assert_eq!(super::thousands(1234567.4), "1,234,567");
         assert_eq!(super::thousands(999.0), "999");
+    }
+
+    #[test]
+    fn merge_relays() {
+        let a = vec!["wss://nostr.wine".to_string()];
+        let b = vec!["wss://nos.lol".to_string(), "wss://nostr.wine/".to_string()];
+        assert_eq!(
+            super::merge_relays(&a, &b),
+            vec!["wss://nostr.wine/", "wss://nos.lol/"]
+        );
     }
 
     #[test]

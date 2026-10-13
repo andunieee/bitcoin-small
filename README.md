@@ -76,6 +76,14 @@ deletion (kind `5`, with `["e", <offer id>]` and `["k", "6012"]`) to those relay
 
 The app uses a set of "app relays" to discover and publish new offers and trade reports. By default this is only `nostr.wine`, a paid relay, so identities are not free. The Settings menu lets you switch relays on and off, remove them, and add your own.
 
+Your offers and trade reports also go to your NIP-65 write relays (kind `10002`). The app looks for your relay list
+on `purplepag.es`, `nos.lol`, `relay.primal.net` and `indexer.coracle.social` when it first needs it. If you have none
+when you make your first offer, it publishes one with `relay.primal.net` and `nos.lol`.
+
+The app also fetches the offers and trade reports of the people you trust from their own write relays, at the same
+time as the main fetch: the people you labeled and never reported a failed trade with, and the ones your last report
+about was a success from the last 6 months. Their reports are kept in the local event database.
+
 ### DMs: a shared-key scheme (kinds `8021` and `28022`)
 
 This is a new scheme, not NIP-17 or NIP-04.
@@ -180,7 +188,7 @@ When a trade is over, either party can publish a report about the other:
 { "kind": 8020, "tags": [["p", "<other party>"]], "content": "never paid" }        // failure
 ```
 
-Reports are signed with your real key. The app stores them in a local event database and publishes them to current app relays.
+Reports are signed with your real key. The app stores them in a local event database and publishes them to your app relays and your write relays.
 
 ### Deciding who to trust
 

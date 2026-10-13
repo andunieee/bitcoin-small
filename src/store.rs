@@ -19,6 +19,9 @@ pub const DEFAULT_RELAYS: &[&str] = &["wss://nostr.wine"];
 #[cfg(debug_assertions)]
 pub const DEFAULT_RELAYS: &[&str] = &["wss://nostr.wine", "wss://nos.lol", "wss://relay.primal.net"];
 
+/// our nip-65 write relays, when we make our first offer and have no relay list yet
+pub const DEFAULT_WRITE_RELAYS: &[&str] = &["wss://relay.primal.net", "wss://nos.lol"];
+
 /// how many of our own reports about someone are enough to not ask anyone else
 pub const ENOUGH_OWN_REPORTS: usize = 20;
 /// how many of our most-traded-with peers we ask about someone
@@ -140,6 +143,10 @@ pub struct State {
     pub app_relays: Vec<String>,
     /// relays shown in the relay menu, enabled or not
     pub known_relays: Vec<String>,
+    /// our nip-65 write relays, where our offers and reports go too. none until we found our relay
+    /// list or published one.
+    #[serde(default)]
+    pub write_relays: Option<Vec<String>>,
     /// relays of offers we made recently, where we listen for pings
     #[serde(default)]
     pub ping_relays: Vec<String>,

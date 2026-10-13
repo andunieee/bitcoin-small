@@ -200,7 +200,7 @@ impl NewOffer {
             tags: Tags(tags),
             content: self.description.clone(),
         }
-        .finalize_protected(sk)
+        .finalize(sk)
     }
 }
 
@@ -325,7 +325,7 @@ impl Conversation {
             ]]),
             content: ciphertext,
         }
-        .finalize_protected(&self.signer);
+        .finalize(&self.signer);
 
         (rumor, evt)
     }
@@ -386,7 +386,7 @@ pub fn ping(me: &SecretKey, peer: &PubKey) -> Event {
         tags: Tags(vec![vec!["p".into(), peer.to_hex()]]),
         content: String::new(),
     }
-    .finalize_protected(me)
+    .finalize(me)
 }
 
 /// a public statement that a trade with `peer` went well (8022) or not (8020)
@@ -401,7 +401,7 @@ pub fn deletion(me: &SecretKey, id: &ID, kind: Kind) -> Event {
         ]),
         content: String::new(),
     }
-    .finalize_protected(me)
+    .finalize(me)
 }
 
 pub fn trade_report(me: &SecretKey, peer: &PubKey, success: bool, comment: &str) -> Event {
@@ -415,7 +415,7 @@ pub fn trade_report(me: &SecretKey, peer: &PubKey, success: bool, comment: &str)
         tags: Tags(vec![vec!["p".into(), peer.to_hex()]]),
         content: comment.to_string(),
     }
-    .finalize_protected(me)
+    .finalize(me)
 }
 
 /// the relays someone writes to, from their nip-65 relay list: `r` tags marked "write" or not
@@ -436,18 +436,20 @@ pub fn write_relays(relay_list: &Event) -> Vec<String> {
     relays
 }
 
-/// every event we publish carries the nip-70 "-" tag, so relays only accept it from its author
-trait FinalizeProtected {
-    fn finalize_protected(self, sk: &SecretKey) -> Event;
-}
-
-impl FinalizeProtected for EventTemplate {
-    fn finalize_protected(mut self, sk: &SecretKey) -> Event {
-        if !self.tags.0.iter().any(|t| t.len() == 1 && t[0] == "-") {
-            self.tags.0.push(vec!["-".into()]);
-        }
-        self.finalize(sk)
+/// our nip-65 relay list, with `relays` as write relays
+pub fn relay_list(me: &SecretKey, relays: &[String]) -> Event {
+    EventTemplate {
+        created_at: now(),
+        kind: KIND_RELAY_LIST,
+        tags: Tags(
+            relays
+                .iter()
+                .map(|r| vec!["r".into(), r.clone(), "write".into()])
+                .collect(),
+        ),
+        content: String::new(),
     }
+    .finalize(me)
 }
 
 fn sha256(data: &[u8]) -> [u8; 32] {
@@ -478,6 +480,10 @@ mod tests {
             super::write_relays(&evt),
             vec!["wss://both.example/", "wss://write.example/"]
         );
+
+        let ours = relay_list(&SecretKey::generate(), &["wss://a.example/".into()]);
+        assert!(ours.verify_signature());
+        assert_eq!(super::write_relays(&ours), vec!["wss://a.example/"]);
     }
 
     #[test]
@@ -490,7 +496,6 @@ mod tests {
 
         let (rumor, evt) = ca.wrap(&a.pubkey(), "hello", None, None);
         assert_eq!(evt.pubkey, ca.pubkey());
-        assert!(evt.tags.0.iter().any(|t| t == &vec!["-".to_string()]));
         let exp: u32 = evt.tags.find("expiration").unwrap()[1].parse().unwrap();
         assert_eq!(exp, evt.created_at.0 + DM_TTL_SECS);
         let got = cb.unwrap(&evt).unwrap();
@@ -519,7 +524,6 @@ mod tests {
         }
         .to_event(&sk);
         assert!(evt.verify_signature());
-        assert!(evt.tags.0.iter().any(|t| t == &vec!["-".to_string()]));
         let o = Offer::from_event(&evt).unwrap();
         assert_eq!(o.currency, "USD");
         assert_eq!(o.premium, 1.5);

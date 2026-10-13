@@ -23,6 +23,8 @@ pub const DEFAULT_RELAYS: &[&str] = &["wss://nostr.wine", "wss://nos.lol", "wss:
 pub const ENOUGH_OWN_REPORTS: usize = 20;
 /// how many of our most-traded-with peers we ask about someone
 pub const TRUSTED_PEERS_TO_ASK: usize = 10;
+/// a successful last trade makes someone trusted for this long
+pub const TRUST_SUCCESS_SECS: u32 = 183 * 24 * 60 * 60;
 
 /// where the small files go. each write replaces the whole file at once.
 pub trait Files: Send + Sync {
@@ -264,6 +266,45 @@ impl Store {
         })
     }
 
+    /// people whose offers we look for on their own relays too: the ones we labeled and never
+    /// reported a failed trade with, and the ones our last report about was a success from the last
+    /// six months. never ourselves or someone we blocked.
+    pub fn trusted_people(&self, me: &PubKey, now: u32) -> Vec<PubKey> {
+        // subject -> our last report about them
+        let mut last: HashMap<PubKey, &Event> = HashMap::new();
+        let mut failed: HashSet<PubKey> = HashSet::new();
+        let mine = self.reports_by(me);
+        for evt in &mine {
+            let Some(pk) = evt.tags.find("p").and_then(|t| t[1].parse::<PubKey>().ok()) else {
+                continue;
+            };
+            if evt.kind == KIND_TRADE_FAILURE {
+                failed.insert(pk);
+            }
+            if last.get(&pk).is_none_or(|l| l.created_at < evt.created_at) {
+                last.insert(pk, evt);
+            }
+        }
+
+        let mut people: Vec<PubKey> = self
+            .state
+            .labels
+            .keys()
+            .filter_map(|hex| hex.parse().ok())
+            .filter(|pk| !failed.contains(pk))
+            .collect();
+        for (pk, evt) in last {
+            if evt.kind == KIND_TRADE_SUCCESS
+                && evt.created_at.0 + TRUST_SUCCESS_SECS >= now
+                && !people.contains(&pk)
+            {
+                people.push(pk);
+            }
+        }
+        people.retain(|pk| pk != me && !self.state.blocked.contains(&pk.to_hex()));
+        people
+    }
+
     /// the people we have reported the most successful trades with, best first
     pub fn top_trade_partners(&self, me: &PubKey, n: usize) -> Vec<PubKey> {
         let mine = self.query(Filter {
@@ -282,5 +323,74 @@ impl Store {
         let mut ranked: Vec<_> = counts.into_iter().collect();
         ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         ranked.into_iter().take(n).map(|(pk, _)| pk).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ritualistic::{EventTemplate, Kind, Tags, Timestamp};
+
+    struct NoFiles;
+
+    impl Files for NoFiles {
+        fn read(&self, _: &str) -> Option<String> {
+            None
+        }
+
+        fn write(&self, _: &str, _: &str) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn memory() -> redb::Database {
+        redb::Database::builder()
+            .create_with_backend(redb::backends::InMemoryBackend::new())
+            .unwrap()
+    }
+
+    #[test]
+    fn trusted_people() {
+        let now = 1_000_000_000;
+        let day = 24 * 60 * 60;
+        let me = SecretKey::generate();
+        let mut store = Store::new(
+            Box::new(NoFiles),
+            RedbEventDatabase::from_database(memory()).unwrap(),
+            History::from_database(memory()).unwrap(),
+        );
+        let report = |about: &PubKey, kind: Kind, days_ago: u32| {
+            store.save_event(
+                &EventTemplate {
+                    created_at: Timestamp(now - days_ago * day),
+                    kind,
+                    tags: Tags(vec![vec!["p".into(), about.to_hex()]]),
+                    content: String::new(),
+                }
+                .finalize(&me),
+            )
+        };
+        let pk = || SecretKey::generate().pubkey();
+        let (labeled, labeled_failed, recent, old, recovered, relapsed, blocked) =
+            (pk(), pk(), pk(), pk(), pk(), pk(), pk());
+
+        report(&labeled_failed, KIND_TRADE_FAILURE, 400);
+        report(&recent, KIND_TRADE_SUCCESS, 10);
+        report(&old, KIND_TRADE_SUCCESS, 200);
+        report(&recovered, KIND_TRADE_FAILURE, 30);
+        report(&recovered, KIND_TRADE_SUCCESS, 20);
+        report(&relapsed, KIND_TRADE_SUCCESS, 30);
+        report(&relapsed, KIND_TRADE_FAILURE, 20);
+        report(&blocked, KIND_TRADE_SUCCESS, 10);
+        for pk in [&labeled, &labeled_failed, &blocked, &me.pubkey()] {
+            store.state.labels.insert(pk.to_hex(), "x".into());
+        }
+        store.state.blocked.insert(blocked.to_hex());
+
+        let mut got = store.trusted_people(&me.pubkey(), now);
+        let mut want = vec![labeled, recent, recovered];
+        got.sort_by_key(|pk| pk.to_hex());
+        want.sort_by_key(|pk| pk.to_hex());
+        assert_eq!(got, want);
     }
 }

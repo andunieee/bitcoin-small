@@ -30,6 +30,13 @@ const PRICE_REFRESH: Duration = Duration::from_secs(60);
 const TRADE_START_SLACK: u32 = 5 * 60;
 /// how many past trades the trades tab lists
 const PAST_TRADES_SHOWN: usize = 30;
+/// where we look for the relay lists (nip-65) of the people we trust
+const INDEXER_RELAYS: &[&str] = &[
+    "wss://purplepag.es",
+    "wss://nos.lol",
+    "wss://relay.primal.net",
+    "wss://indexer.coracle.social",
+];
 
 #[cfg(feature = "screenshots")]
 pub(crate) mod screenshots;
@@ -73,6 +80,10 @@ struct App {
     store: Mutex<Store>,
 
     offers: Mutex<Vec<Offer>>,
+    /// offers of the people we trust, found on their own relays since the last refresh
+    trusted_offers: Mutex<Vec<Offer>>,
+    /// the search for those, stopped when a new refresh starts one again
+    trusted_fetch: Mutex<Option<tokio::task::AbortHandle>>,
     /// (currency, price api) -> btc price
     prices: Mutex<HashMap<(String, String), f64>>,
     /// (currency, price api) -> why the last fetch failed
@@ -166,6 +177,8 @@ fn build(store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::Pl
         ui: ui.as_weak(),
         store: Mutex::new(store),
         offers: Mutex::new(vec![]),
+        trusted_offers: Mutex::new(vec![]),
+        trusted_fetch: Mutex::new(None),
         prices: Mutex::new(HashMap::new()),
         price_errors: Mutex::new(HashMap::new()),
         form_pair: Mutex::new(Default::default()),
@@ -770,7 +783,16 @@ impl App {
 
     // ------------------------------------------------------------------------------ market
 
+    /// fetch every offer from the app relays, and, at the same time, the offers of the people we
+    /// trust from their own relays
     fn refresh_offers(self: &Arc<Self>) {
+        self.trusted_offers.lock().unwrap().clear();
+        let app = self.clone();
+        let handle = tokio::spawn(async move { app.fetch_trusted_offers().await }).abort_handle();
+        if let Some(previous) = self.trusted_fetch.lock().unwrap().replace(handle) {
+            previous.abort();
+        }
+
         let app = self.clone();
         tokio::spawn(async move {
             let _ = app.ui.upgrade_in_event_loop(|ui| ui.set_loading(true));
@@ -788,16 +810,13 @@ impl App {
                 )
                 .await;
 
-            let mut offers: Vec<Offer> = events
-                .iter()
-                .filter(|e| e.created_at >= since && e.verify_signature())
-                .filter_map(Offer::from_event)
-                .filter(|o| !app.is_blocked(&o.maker))
-                .collect();
-            // our own offers only show while we still have them open, a relay may have
-            // ignored the deletion of one we closed
-            let mine: HashSet<ID> = app.open_offers().iter().map(|o| o.id).collect();
-            offers.retain(|o| o.maker != app.me() || mine.contains(&o.id));
+            let mut offers = app.offers_from(&events, since);
+            // the trusted ones that arrived first stay
+            for o in app.trusted_offers.lock().unwrap().iter() {
+                if !offers.iter().any(|x| x.id == o.id) {
+                    offers.push(o.clone());
+                }
+            }
             offers.sort_by_key(|o| std::cmp::Reverse(o.created_at));
             let count = offers.len();
             *app.offers.lock().unwrap() = offers;
@@ -806,6 +825,93 @@ impl App {
             app.render_offers();
             app.fetch_prices().await;
         });
+    }
+
+    /// one by one, look up the write relays (nip-65) of each person we trust, and their offers
+    /// there. these show up in the market as they arrive.
+    async fn fetch_trusted_offers(self: &Arc<Self>) {
+        let people = {
+            let store = self.store.lock().unwrap();
+            store.trusted_people(&self.me(), now().0)
+        };
+        let indexers: Vec<String> = INDEXER_RELAYS.iter().map(|r| r.to_string()).collect();
+        let mut added = false;
+        for pk in people {
+            let lists = self
+                .fetch(
+                    indexers.clone(),
+                    Filter {
+                        kinds: Some(vec![KIND_RELAY_LIST]),
+                        authors: Some(vec![pk]),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            let Some(list) = lists
+                .iter()
+                .filter(|e| e.pubkey == pk && e.verify_signature())
+                .max_by_key(|e| e.created_at)
+            else {
+                continue;
+            };
+            let relays = write_relays(list);
+            if relays.is_empty() {
+                continue;
+            }
+
+            let since = Timestamp(now().0.saturating_sub(OFFER_TTL_SECS));
+            let events = self
+                .fetch(
+                    relays,
+                    Filter {
+                        kinds: Some(vec![KIND_OFFER]),
+                        authors: Some(vec![pk]),
+                        since: Some(since),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            let found: Vec<Offer> = self
+                .offers_from(&events, since)
+                .into_iter()
+                .filter(|o| o.maker == pk)
+                .collect();
+            if found.is_empty() {
+                continue;
+            }
+            {
+                let mut trusted = self.trusted_offers.lock().unwrap();
+                let mut offers = self.offers.lock().unwrap();
+                for o in found {
+                    if !trusted.iter().any(|x| x.id == o.id) {
+                        trusted.push(o.clone());
+                    }
+                    if !offers.iter().any(|x| x.id == o.id) {
+                        offers.push(o);
+                        added = true;
+                    }
+                }
+                offers.sort_by_key(|o| std::cmp::Reverse(o.created_at));
+            }
+            self.render_offers();
+        }
+        if added {
+            self.fetch_prices().await;
+        }
+    }
+
+    /// the valid offers among `events`, leaving out blocked makers and our own closed offers
+    fn offers_from(&self, events: &[Event], since: Timestamp) -> Vec<Offer> {
+        // our own offers only show while we still have them open, a relay may have
+        // ignored the deletion of one we closed
+        let mine: HashSet<ID> = self.open_offers().iter().map(|o| o.id).collect();
+        events
+            .iter()
+            .filter(|e| e.created_at >= since && e.verify_signature())
+            .filter_map(Offer::from_event)
+            .filter(|o| !self.is_blocked(&o.maker))
+            .filter(|o| o.maker != self.me() || mine.contains(&o.id))
+            .collect()
     }
 
     /// the prices of every offer we show and of what is picked in the new offer form
@@ -1889,6 +1995,7 @@ impl App {
             // stop looking for their messages, that's all a block is
             self.dm_subs.lock().unwrap().remove(&peer.to_hex());
             self.offers.lock().unwrap().retain(|o| o.maker != peer);
+            self.trusted_offers.lock().unwrap().retain(|o| o.maker != peer);
             self.render_offers();
         } else {
             self.ensure_dm_sub(peer, false);

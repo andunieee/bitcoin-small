@@ -18,6 +18,8 @@ pub const KIND_DELETION: Kind = Kind(5);
 pub const KIND_RUMOR: Kind = Kind(14);
 pub const KIND_TRADE_FAILURE: Kind = Kind(8020);
 pub const KIND_TRADE_SUCCESS: Kind = Kind(8022);
+/// nip-65 relay list
+pub const KIND_RELAY_LIST: Kind = Kind(10002);
 
 /// offers expire after this, and clients only look this far back
 pub const OFFER_TTL_SECS: u32 = 3 * 60 * 60;
@@ -416,6 +418,24 @@ pub fn trade_report(me: &SecretKey, peer: &PubKey, success: bool, comment: &str)
     .finalize_protected(me)
 }
 
+/// the relays someone writes to, from their nip-65 relay list: `r` tags marked "write" or not
+/// marked at all
+pub fn write_relays(relay_list: &Event) -> Vec<String> {
+    let mut relays: Vec<String> = vec![];
+    for tag in relay_list.tags.find_all("r") {
+        if tag.get(2).is_some_and(|marker| marker != "write") {
+            continue;
+        }
+        if let Ok(url) = ritualistic::normalize_url(&tag[1]) {
+            let url = url.to_string();
+            if !relays.contains(&url) {
+                relays.push(url);
+            }
+        }
+    }
+    relays
+}
+
 /// every event we publish carries the nip-70 "-" tag, so relays only accept it from its author
 trait FinalizeProtected {
     fn finalize_protected(self, sk: &SecretKey) -> Event;
@@ -438,6 +458,27 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_relays() {
+        let evt = EventTemplate {
+            created_at: now(),
+            kind: KIND_RELAY_LIST,
+            tags: Tags(vec![
+                vec!["r".into(), "wss://both.example".into()],
+                vec!["r".into(), "wss://write.example".into(), "write".into()],
+                vec!["r".into(), "wss://read.example".into(), "read".into()],
+                vec!["r".into(), "wss://both.example/".into()],
+                vec!["r".into(), "not a url".into()],
+            ]),
+            content: String::new(),
+        }
+        .finalize(&SecretKey::generate());
+        assert_eq!(
+            super::write_relays(&evt),
+            vec!["wss://both.example/", "wss://write.example/"]
+        );
+    }
 
     #[test]
     fn both_sides_derive_the_same_conversation() {

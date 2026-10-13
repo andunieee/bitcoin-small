@@ -74,13 +74,7 @@ deletion (kind `5`, with `["e", <offer id>]` and `["k", "6012"]`) to those relay
 
 ### Relays
 
-The app uses a set of "app relays" to fetch and publish offers and trade reports. By default these are paid relays:
-`nostr.land`, `nostr21.com`, `nostr.wine`, `eden.nostr.land`, `atlas.nostr.land`, `relay.nostrplebs.com`,
-and `nostr.plebchain.org`. Paid relays only accept writes from paying users. The Settings menu
-lets you switch relays on and off, remove them, and add your own.
-
-The negotiation relays of an offer are separate. When you create an offer they default to your app relays, but you can
-change them.
+The app uses a set of "app relays" to discover and publish new offers and trade reports. By default this is only `nostr.wine`, a paid relay, so identities are not free. The Settings menu lets you switch relays on and off, remove them, and add your own.
 
 ### DMs: a shared-key scheme (kinds `8021` and `28022`)
 

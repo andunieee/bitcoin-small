@@ -12,7 +12,7 @@ android-install:
     export CARGO_APK_DEV_KEYSTORE="$PWD/release.jks"
     export CARGO_APK_DEV_KEYSTORE_PASSWORD="$(cat release.jks.password)"
     cargo apk build --lib --target aarch64-linux-android
-    adb install -r target/debug/apk/bitcoin-smol.apk
+    adb install -r ~/.cache/cargo-target/debug/apk/bitcoin-smol.apk
 
 # run the desktop app
 desktop:

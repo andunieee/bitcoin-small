@@ -38,13 +38,14 @@ export struct TradeView {
     label: string,
     blocked: bool,
     summary: string,
-    status: string,
-    started: string,
 }
 
+// one row of what has been agreed, with a second column when label2 isn't empty
 export struct DealRow {
     label: string,
     value: string,
+    label2: string,
+    value2: string,
 }
 
 // the structured state of a trade that came from an offer, and which of its forms are ours to fill
@@ -79,6 +80,10 @@ export struct DealView {
 export struct MsgItem {
     mine: bool,
     text: string,
+    // a structured message, shown by what it sets
+    meta: bool,
+    // a structured one that set nothing, as it made no sense when it arrived
+    ignored: bool,
     time: string,
 }
 
@@ -243,6 +248,9 @@ component DealPanel inherits VerticalLayout {
     callback pick-payment(string);
     callback give-details(string);
     callback mark-sent();
+    // why the details can't be sent, empty when they can
+    pure callback check-details(string) -> string;
+    property <string> details-error: root.check-details(root.draft);
     spacing: 8px;
     alignment: start;
 
@@ -273,19 +281,36 @@ component DealPanel inherits VerticalLayout {
         }
     }
 
-    Card {
+    if root.deal.rows.length > 0: Card {
         VerticalLayout {
             padding: 10px;
             spacing: 6px;
-            for row in root.deal.rows: VerticalLayout {
-                Muted {
-                    text: row.label;
+            for row in root.deal.rows: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    Muted {
+                        text: row.label;
+                    }
+
+                    Text {
+                        text: row.value;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
                 }
 
-                Text {
-                    text: row.value;
-                    font-size: 13px;
-                    wrap: word-wrap;
+                if row.label2 != "": VerticalLayout {
+                    horizontal-stretch: 1;
+                    Muted {
+                        text: row.label2;
+                    }
+
+                    Text {
+                        text: row.value2;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
                 }
             }
         }
@@ -392,9 +417,15 @@ component DealPanel inherits VerticalLayout {
                 read-only: root.confirming == "details";
             }
 
+            if root.details-error != "": Text {
+                text: root.details-error;
+                color: #c62828;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
             if root.confirming != "details": Button {
                 text: "Send…";
-                enabled: root.draft != "";
+                enabled: root.draft != "" && root.details-error == "";
                 clicked => {
                     root.confirming = "details";
                 }
@@ -407,6 +438,7 @@ component DealPanel inherits VerticalLayout {
                 Button {
                     text: "Confirm and send";
                     primary: true;
+                    enabled: root.details-error == "";
                     clicked => {
                         root.give-details(root.draft);
                     }
@@ -456,6 +488,42 @@ component DealPanel inherits VerticalLayout {
                         root.confirming = "";
                     }
                 }
+            }
+        }
+    }
+}
+
+// what can be done with a whole trade, from the header of its page
+component TradeActions inherits HorizontalLayout {
+    in property <bool> ongoing;
+    in-out property <bool> confirm-delete;
+    callback conclude();
+    callback archive();
+    callback delete();
+    spacing: 6px;
+    alignment: end;
+    if root.ongoing: Button {
+        text: "Conclude";
+        y: (parent.height - self.height) / 2;
+        clicked => {
+            root.conclude();
+        }
+    }
+    if root.ongoing: Button {
+        text: "Archive";
+        y: (parent.height - self.height) / 2;
+        clicked => {
+            root.archive();
+        }
+    }
+    Button {
+        text: root.confirm-delete ? "Really delete?" : "Delete";
+        y: (parent.height - self.height) / 2;
+        clicked => {
+            if root.confirm-delete {
+                root.delete();
+            } else {
+                root.confirm-delete = true;
             }
         }
     }
@@ -585,6 +653,7 @@ export component AppWindow inherits Window {
     callback trade-pick-bitcoin(string);
     callback trade-pick-payment(string);
     callback trade-give-details(string);
+    pure callback trade-check-details(string) -> string;
     callback trade-mark-sent();
     callback conclude-trade(bool, string);
     callback archive-trade();
@@ -671,6 +740,13 @@ export component AppWindow inherits Window {
                         vertical-alignment: center;
                         overflow: elide;
                         horizontal-stretch: 1;
+                        // what it says is mostly about relays, which are set up there
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.page = 6;
+                            }
+                        }
                     }
                 }
 
@@ -1241,114 +1317,112 @@ export component AppWindow inherits Window {
                 if root.page == 4: VerticalLayout {
                     padding: 16px;
                     spacing: 8px;
-                    HorizontalLayout {
-                        spacing: 8px;
-                        if root.trade.label != "": Label {
-                            text: root.trade.label;
-                            y: (parent.height - self.height) / 2;
-                        }
-                        Text {
-                            text: root.trade.peer-short + (root.trade.blocked ? " (blocked)" : "");
-                            font-weight: root.trade.label != "" ? 400 : 700;
-                            vertical-alignment: center;
-                            overflow: elide;
-                            horizontal-stretch: 1;
-                        }
-
-                        Button {
-                            text: "Profile";
-                            clicked => {
-                                root.open-profile(root.trade.peer);
-                            }
-                        }
-                    }
-
+                    // the offer, who it is with, and what can be done with the whole trade
                     Card {
                         VerticalLayout {
                             padding: 10px;
-                            spacing: 2px;
-                            Text {
-                                text: root.trade.summary;
-                                wrap: word-wrap;
-                                font-size: 13px;
-                            }
-
-                            Text {
-                                text: root.trade.status;
-                                font-weight: 700;
-                                font-size: 13px;
-                                wrap: word-wrap;
-                            }
-
-                            Muted {
-                                text: root.trade.started;
-                            }
-                        }
-                    }
-
-                    if !root.trade-concluding: HorizontalLayout {
-                        spacing: 8px;
-                        if root.trade.ongoing: Button {
-                            text: "Conclude";
-                            clicked => {
-                                root.trade-concluding = true;
-                            }
-                        }
-                        if root.trade.ongoing: Button {
-                            text: "Archive";
-                            clicked => {
-                                root.archive-trade();
-                            }
-                        }
-                        Button {
-                            text: root.trade-confirm-delete ? "Really delete?" : "Delete";
-                            clicked => {
-                                if root.trade-confirm-delete {
-                                    root.delete-trade();
-                                } else {
-                                    root.trade-confirm-delete = true;
-                                }
-                            }
-                        }
-                    }
-
-                    if root.trade-concluding: Card {
-                        VerticalLayout {
-                            padding: 10px;
                             spacing: 8px;
-                            Text {
-                                text: "How did it go?";
-                                font-weight: 700;
-                            }
-
-                            conclusion := LineEdit {
-                                placeholder-text: "optional comment, e.g. \"$5 via PIX, fast\"";
-                            }
-
                             HorizontalLayout {
                                 spacing: 8px;
-                                Button {
-                                    text: "✓ Success";
-                                    clicked => {
-                                        root.conclude-trade(true, conclusion.text);
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 4px;
+                                    alignment: center;
+                                    Text {
+                                        text: root.trade.summary;
+                                        font-weight: 700;
+                                        font-size: 13px;
+                                        wrap: word-wrap;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        alignment: start;
+                                        if root.trade.label != "": Label {
+                                            text: root.trade.label;
+                                        }
+                                        Text {
+                                            text: root.trade.peer-short + (root.trade.blocked ? " (blocked)" : "");
+                                            color: #f7931a;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    root.open-profile(root.trade.peer);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
 
-                                Button {
-                                    text: "✗ Failure";
-                                    clicked => {
-                                        root.conclude-trade(false, conclusion.text);
+                                if !root.trade-concluding && root.trade-wide: TradeActions {
+                                    ongoing: root.trade.ongoing;
+                                    confirm-delete <=> root.trade-confirm-delete;
+                                    conclude => {
+                                        root.trade-concluding = true;
                                     }
-                                }
-
-                                Button {
-                                    text: "Cancel";
-                                    clicked => {
-                                        root.trade-concluding = false;
+                                    archive => {
+                                        root.archive-trade();
+                                    }
+                                    delete => {
+                                        root.delete-trade();
                                     }
                                 }
                             }
 
+                            // on narrow screens they go under it, so the offer keeps the width
+                            if !root.trade-concluding && !root.trade-wide: TradeActions {
+                                alignment: start;
+                                ongoing: root.trade.ongoing;
+                                confirm-delete <=> root.trade-confirm-delete;
+                                conclude => {
+                                    root.trade-concluding = true;
+                                }
+                                archive => {
+                                    root.archive-trade();
+                                }
+                                delete => {
+                                    root.delete-trade();
+                                }
+                            }
+
+                            if root.trade-concluding: VerticalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: "How did it go?";
+                                    font-weight: 700;
+                                }
+
+                                conclusion := LineEdit {
+                                    placeholder-text: "optional comment, e.g. \"$5 via PIX, fast\"";
+                                }
+
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Button {
+                                        text: "✓ Success";
+                                        clicked => {
+                                            root.conclude-trade(true, conclusion.text);
+                                        }
+                                    }
+
+                                    Button {
+                                        text: "✗ Failure";
+                                        clicked => {
+                                            root.conclude-trade(false, conclusion.text);
+                                        }
+                                    }
+
+                                    Button {
+                                        text: "Cancel";
+                                        clicked => {
+                                            root.trade-concluding = false;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -1379,6 +1453,9 @@ export component AppWindow inherits Window {
                                 give-details(d) => {
                                     root.trade-give-details(d);
                                 }
+                                check-details(d) => {
+                                    return root.trade-check-details(d);
+                                }
                                 mark-sent => {
                                     root.trade-mark-sent();
                                 }
@@ -1397,19 +1474,45 @@ export component AppWindow inherits Window {
                                     padding-bottom: 6px;
                                     padding-right: 6px;
                                     alignment: msg.mine ? end : start;
-                                    Rectangle {
-                                        max-width: 300px;
+                                    if !msg.meta: Rectangle {
+                                        width: min(300px, plain-text.preferred-width + 16px);
+                                        height: plain-layout.preferred-height;
                                         border-radius: 10px;
                                         background: msg.mine ? #f7931a33 : Palette.alternate-background;
-                                        VerticalLayout {
+                                        plain-layout := VerticalLayout {
                                             padding: 8px;
-                                            Text {
+                                            plain-text := Text {
                                                 text: msg.text;
                                                 wrap: word-wrap;
                                             }
 
                                             Muted {
                                                 text: msg.time;
+                                                horizontal-alignment: right;
+                                            }
+                                        }
+                                    }
+                                    // a structured message: an update to the deal, not something said
+                                    if msg.meta: Rectangle {
+                                        width: min(300px, meta-text.preferred-width + 16px);
+                                        height: meta-layout.preferred-height;
+                                        border-radius: 6px;
+                                        border-width: 1px;
+                                        border-color: #1565c0;
+                                        background: #1565c022;
+                                        opacity: msg.ignored ? 0.5 : 1;
+                                        meta-layout := VerticalLayout {
+                                            padding: 8px;
+                                            spacing: 2px;
+                                            meta-text := Text {
+                                                text: msg.text;
+                                                font-size: 13px;
+                                                font-weight: 700;
+                                                wrap: word-wrap;
+                                            }
+
+                                            Muted {
+                                                text: (msg.ignored ? "ignored, it didn't fit the deal · " : "") + msg.time;
                                                 horizontal-alignment: right;
                                             }
                                         }
@@ -1464,6 +1567,9 @@ export component AppWindow inherits Window {
                                     }
                                     give-details(d) => {
                                         root.trade-give-details(d);
+                                    }
+                                    check-details(d) => {
+                                        return root.trade-check-details(d);
                                     }
                                     mark-sent => {
                                         root.trade-mark-sent();

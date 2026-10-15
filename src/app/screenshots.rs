@@ -497,10 +497,7 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
         (Maker, Line::Act(Action::Price(price.round()))),
         (Taker, Line::Act(Action::BitcoinMethod("lightning".into()))),
         (Taker, Line::Act(Action::PaymentMethod("Zelle".into()))),
-        (Taker, Line::Act(Action::BitcoinDetails(
-            "lnbc354200n1p5kqz7mpp5w8xq3n0y4kz9cj6t2ha7f0d8e3l5r9u6s2v4n7m8q0p3x5y7z9a2sdq5"
-                .into(),
-        ))),
+        (Taker, Line::Act(Action::BitcoinDetails("satstacker@example.com".into()))),
         (Maker, Line::Act(Action::PaymentDetails("lucas.m@example.com".into()))),
     ],
     );

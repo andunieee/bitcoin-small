@@ -175,6 +175,31 @@ impl Action {
     }
 }
 
+impl Action {
+    /// what the action sets, said with the data alone: what the chat shows for it, rather than
+    /// the text that came with it. `deal` is how it was before the action.
+    pub fn summary(&self, terms: &OfferTerms, who: Role, deal: &Deal) -> String {
+        let cur = &terms.currency;
+        match self {
+            Action::Amount(a) => format!("amount: {} {cur}", fiat(*a)),
+            Action::Price(p) => match deal.amount {
+                Some(a) => format!(
+                    "price: {} {cur}/BTC · {} {cur} = {} sats",
+                    thousands(*p),
+                    fiat(a),
+                    thousands(sats(a, *p) as f64)
+                ),
+                None => format!("price: {} {cur}/BTC", thousands(*p)),
+            },
+            Action::BitcoinMethod(m) => format!("bitcoin sent via: {m}"),
+            Action::PaymentMethod(m) => format!("{cur} sent via: {m}"),
+            Action::BitcoinDetails(d) => format!("bitcoin goes to:\n{}", d.trim()),
+            Action::PaymentDetails(d) => format!("{cur} goes to:\n{}", d.trim()),
+            Action::Sent => format!("sent {}", terms.what_sends(who, deal)),
+        }
+    }
+}
+
 /// a step of the deal, in the order they are expected
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -260,11 +285,23 @@ impl Deal {
 
     /// apply the actions of the chat in order, ignoring the ones that make no sense
     pub fn replay(terms: &OfferTerms, messages: &[Message]) -> Self {
+        Self::replay_noting(terms, messages, |_, _, _| {})
+    }
+
+    /// replay, calling `seen` with each action, the deal as it was before it, and whether it
+    /// was applied
+    pub fn replay_noting(
+        terms: &OfferTerms,
+        messages: &[Message],
+        mut seen: impl FnMut(&Action, &Deal, bool),
+    ) -> Self {
         let mut deal = Deal::new(terms);
         let me = terms.my_role();
         for m in messages {
             if let Some(action) = m.action.as_deref().and_then(Action::from_tag) {
-                deal.apply(terms, if m.mine { me } else { me.other() }, &action);
+                let before = deal.clone();
+                let applied = deal.apply(terms, if m.mine { me } else { me.other() }, &action);
+                seen(&action, &before, applied);
             }
         }
         deal
@@ -349,7 +386,11 @@ impl Deal {
             Action::PaymentMethod(m) if !terms.payment_methods.contains(m) => {
                 return Err(format!("{m} is not one of the offer's payment methods"));
             }
-            Action::BitcoinDetails(d) | Action::PaymentDetails(d) if d.trim().is_empty() => {
+            Action::BitcoinDetails(d) => {
+                let method = self.bitcoin_method.as_deref().unwrap_or("");
+                crate::address::parse(method, d, self.sats())?;
+            }
+            Action::PaymentDetails(d) if d.trim().is_empty() => {
                 return Err("the details are empty".into());
             }
             _ => {}
@@ -423,7 +464,7 @@ pub fn deviation_pct(quoted: f64, expected: f64) -> f64 {
 /// what to ask the bitcoin receiver for, depending on how it is sent
 pub fn destination_name(bitcoin_method: &str) -> &'static str {
     match bitcoin_method {
-        "lightning" => "lightning invoice",
+        "lightning" => "lightning invoice or address",
         "onchain" | "liquid" | "rootstock" | "arkade" => "address",
         _ => "address or invoice",
     }
@@ -446,6 +487,9 @@ mod tests {
             bitcoin_methods: vec!["lightning".into()],
         }
     }
+
+    /// from bolt 11, for no amount in particular
+    const INVOICE: &str = "lnbc1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaq9qrsgq357wnc5r2ueh7ck6q93dj32dlqnls087fxdwk8qakdyafkq3yap9us6v52vjjsrvywa6rt52cm9r9zqt8r2t7mlcwspyetp5h2tztugp9lfyql";
 
     fn msg(mine: bool, action: Action) -> Message {
         Message {
@@ -505,7 +549,8 @@ mod tests {
                 msg(t, Action::Sent),                            // too early
                 msg(!t, Action::Price(100_000.0)),               // the taker can't say it
                 msg(t, Action::Price(100_000.0)),
-                msg(!t, Action::BitcoinDetails("lnbc1".into())),
+                msg(!t, Action::BitcoinDetails("lnbc1".into())), // not an invoice, ignored
+                msg(!t, Action::BitcoinDetails(INVOICE.into())),
                 msg(t, Action::PaymentDetails("me@zelle".into())),
                 msg(!t, Action::Sent),
                 msg(t, Action::Sent),
@@ -516,7 +561,7 @@ mod tests {
         assert_eq!(taker, maker);
         assert_eq!(taker.amount, Some(50.0));
         assert_eq!(taker.sats(), Some(50_000));
-        assert_eq!(taker.bitcoin_details.as_deref(), Some("lnbc1"));
+        assert_eq!(taker.bitcoin_details.as_deref(), Some(INVOICE));
         assert_eq!(taker.payment_details.as_deref(), Some("me@zelle"));
         assert!(taker.concluded());
 
@@ -540,7 +585,7 @@ mod tests {
         );
         assert_eq!(
             half.next_step(&terms(false)),
-            "your turn: give your lightning invoice"
+            "your turn: give your lightning invoice or address"
         );
     }
 }

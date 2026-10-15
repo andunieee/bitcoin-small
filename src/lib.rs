@@ -1,3 +1,4 @@
+pub mod address;
 mod app;
 pub mod deal;
 pub mod form;

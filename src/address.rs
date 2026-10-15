@@ -13,7 +13,8 @@ pub fn parse(method: &str, input: &str, sats: Option<u64>) -> Result<String, Str
         return Err("the details are empty".into());
     }
     match method {
-        "onchain" => {
+        // "onchain" is how it was called before
+        "on-chain" | "onchain" => {
             let s = strip_uri(s, "bitcoin:");
             onchain(s).ok_or_else(|| "that is not a valid bitcoin address".into())
         }
@@ -362,10 +363,10 @@ mod tests {
             "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0",
             "bitcoin:bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4?amount=0.001",
         ] {
-            assert!(ok("onchain", a), "{a}");
+            assert!(ok("on-chain", a), "{a}");
         }
         assert_eq!(
-            parse("onchain", "BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4", None).unwrap(),
+            parse("on-chain", "BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4", None).unwrap(),
             "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
         );
         for a in [
@@ -377,7 +378,7 @@ mod tests {
             "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
             "hello",
         ] {
-            assert!(!ok("onchain", a), "{a}");
+            assert!(!ok("on-chain", a), "{a}");
         }
     }
 

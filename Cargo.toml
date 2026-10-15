@@ -43,7 +43,13 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 sys-locale = { version = "0.3", features = ["js"] }
-web-sys = { version = "0.3", features = ["Storage", "Window"] }
+web-sys = { version = "0.3", features = [
+    "Storage",
+    "Window",
+    "Notification",
+    "NotificationOptions",
+    "NotificationPermission",
+] }
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
@@ -52,9 +58,12 @@ console_log = "1"
 [target.'cfg(target_os = "android")'.dependencies]
 slint = { version = "1.17", features = ["backend-android-activity-06"] }
 android_logger = "0.15"
+jni = "0.21"
+ndk-context = "0.1"
 
 [target.'cfg(not(any(target_os = "android", target_arch = "wasm32")))'.dependencies]
 env_logger = "0.11"
+notify-rust = "4"
 
 [build-dependencies]
 slint-build = "1.17"
@@ -70,6 +79,9 @@ target_sdk_version = 34
 
 [[package.metadata.android.uses_permission]]
 name = "android.permission.INTERNET"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.POST_NOTIFICATIONS"
 
 [package.metadata.android.application]
 label = "bitcoin smol"

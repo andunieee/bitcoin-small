@@ -78,6 +78,7 @@ export struct DealView {
 }
 
 export struct MsgItem {
+    id: string,
     mine: bool,
     text: string,
     // a structured message, shown by what it sets
@@ -116,6 +117,10 @@ export struct RelayAnswer {
 /// one thing we sent and how each relay took it
 export struct SentItem {
     title: string,
+    // said instead of the answers when there are none
+    note: string,
+    // the event itself, indented
+    json: string,
     answers: [RelayAnswer],
 }
 
@@ -239,7 +244,7 @@ component Choices inherits Card {
 // where a trade stands and the forms that move it forward. picking something sends a message.
 component DealPanel inherits VerticalLayout {
     in property <DealView> deal;
-    // "details" or "sent" while asking to confirm those
+    // "details" while asking to confirm them
     in-out property <string> confirming;
     in-out property <string> draft;
     callback pick-amount(string);
@@ -462,31 +467,15 @@ component DealPanel inherits VerticalLayout {
                 wrap: word-wrap;
             }
 
-            if root.confirming != "sent": Button {
+            Muted {
+                text: "Only press it once it has actually left your account or wallet. They will rely on it.";
+            }
+
+            Button {
                 text: root.deal.send-label;
                 primary: true;
                 clicked => {
-                    root.confirming = "sent";
-                }
-            }
-            if root.confirming == "sent": Tip {
-                text: "Only confirm once it has actually left your account or wallet. They will rely on it.";
-            }
-            if root.confirming == "sent": HorizontalLayout {
-                spacing: 8px;
-                Button {
-                    text: "Yes, it's sent";
-                    primary: true;
-                    clicked => {
-                        root.mark-sent();
-                    }
-                }
-
-                Button {
-                    text: "Cancel";
-                    clicked => {
-                        root.confirming = "";
-                    }
+                    root.mark-sent();
                 }
             }
         }
@@ -526,6 +515,73 @@ component TradeActions inherits HorizontalLayout {
                 root.confirm-delete = true;
             }
         }
+    }
+}
+
+// one thing in the relay report popup: each relay's answer, and the raw event behind a toggle
+component SentReport inherits VerticalLayout {
+    in property <SentItem> item;
+    property <bool> show-json;
+    callback open-relay-site(string);
+    spacing: 4px;
+
+    Text {
+        text: root.item.title;
+        font-weight: 700;
+        wrap: word-wrap;
+    }
+
+    if root.item.note != "": Muted {
+        text: root.item.note;
+    }
+
+    for answer in root.item.answers: HorizontalLayout {
+        spacing: 8px;
+        Text {
+            width: 16px;
+            text: answer.state == "ok" ? "✓" : answer.state == "failed" ? "✗" : "…";
+            color: answer.state == "ok" ? #2e9e44 : answer.state == "failed" ? #d33 : Palette.foreground;
+            font-weight: 700;
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            Text {
+                text: answer.host;
+                color: #f7931a;
+                overflow: elide;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.open-relay-site(answer.host);
+                    }
+                }
+            }
+
+            if answer.error != "": Muted {
+                text: answer.error;
+            }
+        }
+    }
+
+    if root.item.json != "": Text {
+        text: root.show-json ? "hide raw event" : "show raw event";
+        color: #f7931a;
+        font-size: 12px;
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.show-json = !root.show-json;
+            }
+        }
+    }
+
+    if root.show-json: TextEdit {
+        text: root.item.json;
+        read-only: true;
+        wrap: char-wrap;
+        font-size: 11px;
+        height: 220px;
     }
 }
 
@@ -687,11 +743,13 @@ export component AppWindow inherits Window {
     callback open-docs();
     callback import-nsec(string);
 
-    // relay report popup, shown whenever something is sent to relays
+    // relay report popup, shown when most relays failed to take something we sent
     in property <[SentItem]> sent;
     in property <bool> sent-open;
     callback close-sent();
     callback open-relay-site(string);
+    // the popup for one message, from its timestamp
+    callback open-message-report(string);
 
     // on wide screens the content stays in a column of at most this width, centered by the stretch-0 spacers around it
     property <length> max-content-width: 1200px;
@@ -1489,6 +1547,12 @@ export component AppWindow inherits Window {
                                             Muted {
                                                 text: msg.time;
                                                 horizontal-alignment: right;
+                                                TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        root.open-message-report(msg.id);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1514,6 +1578,12 @@ export component AppWindow inherits Window {
                                             Muted {
                                                 text: (msg.ignored ? "ignored, it didn't fit the deal · " : "") + msg.time;
                                                 horizontal-alignment: right;
+                                                TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        root.open-message-report(msg.id);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1522,16 +1592,29 @@ export component AppWindow inherits Window {
 
                             if root.trade.ongoing && !root.trade.blocked: HorizontalLayout {
                                 spacing: 8px;
-                                input := LineEdit {
-                                    placeholder-text: "message";
-                                    accepted => {
-                                        root.send-message(self.text);
-                                        self.text = "";
+                                // enter sends, shift+enter goes to a new line
+                                FocusScope {
+                                    horizontal-stretch: 1;
+                                    height: 64px;
+                                    capture-key-pressed(event) => {
+                                        if event.text == Key.Return && !event.modifiers.shift {
+                                            root.send-message(input.text);
+                                            input.text = "";
+                                            return accept;
+                                        }
+                                        return reject;
+                                    }
+                                    input := TextEdit {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        placeholder-text: "message";
+                                        wrap: word-wrap;
                                     }
                                 }
 
                                 Button {
                                     text: "Send";
+                                    y: (parent.height - self.height) / 2;
                                     clicked => {
                                         root.send-message(input.text);
                                         input.text = "";
@@ -1977,45 +2060,18 @@ export component AppWindow inherits Window {
                     text: "Relays";
                 }
 
-                ScrollView {
+                sv-sent := ScrollView {
                     vertical-stretch: 1;
+                    content-width: self.visible-width;
                     VerticalLayout {
+                        width: sv-sent.visible-width;
+                        padding-right: 6px;
                         spacing: 12px;
-                        for item in root.sent: VerticalLayout {
-                            spacing: 4px;
-                            Text {
-                                text: item.title;
-                                font-weight: 700;
-                                wrap: word-wrap;
-                            }
-
-                            for answer in item.answers: HorizontalLayout {
-                                spacing: 8px;
-                                Text {
-                                    width: 16px;
-                                    text: answer.state == "ok" ? "✓" : answer.state == "failed" ? "✗" : "…";
-                                    color: answer.state == "ok" ? #2e9e44 : answer.state == "failed" ? #d33 : Palette.foreground;
-                                    font-weight: 700;
-                                }
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    Text {
-                                        text: answer.host;
-                                        color: #f7931a;
-                                        overflow: elide;
-                                        TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                root.open-relay-site(answer.host);
-                                            }
-                                        }
-                                    }
-
-                                    if answer.error != "": Muted {
-                                        text: answer.error;
-                                    }
-                                }
+                        alignment: start;
+                        for item in root.sent: SentReport {
+                            item: item;
+                            open-relay-site(host) => {
+                                root.open-relay-site(host);
                             }
                         }
                     }

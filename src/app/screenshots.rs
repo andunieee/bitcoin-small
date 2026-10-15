@@ -294,6 +294,7 @@ fn chat(terms: &OfferTerms, start_minutes_ago: u32, lines: Vec<(Role, Line)>) ->
                 mine: who == me,
                 text,
                 action,
+                ..Default::default()
             }
         })
         .collect()
@@ -348,7 +349,7 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
         premium: -1.0,
         amount: (20.0, 200.0),
         payments: &["SEPA", "Revolut"],
-        bitcoin: &["lightning", "onchain"],
+        bitcoin: &["lightning", "on-chain"],
         description: "",
     };
     let specs: Vec<(&SecretKey, u32, OfferSpec)> = vec![
@@ -378,7 +379,7 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
                 premium: 1.5,
                 amount: (5.0, 10_000.0),
                 payments: &["M-Pesa"],
-                bitcoin: &["lightning", "onchain"],
+                bitcoin: &["lightning", "on-chain"],
                 description: "",
             },
         ),
@@ -420,7 +421,7 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
                 premium: 4.0,
                 amount: (10_000.0, 500_000.0),
                 payments: &["Bank transfer"],
-                bitcoin: &["onchain", "lightning"],
+                bitcoin: &["on-chain", "lightning"],
                 description: "",
             },
         ),
@@ -448,7 +449,7 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
                 premium: -3.0,
                 amount: (50.0, 400.0),
                 payments: &["Cash App", "PayPal Friends & Family"],
-                bitcoin: &["onchain"],
+                bitcoin: &["on-chain"],
                 description: "",
             },
         ),
@@ -475,7 +476,7 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
         premium: -1.0,
         amount: Some((20.0, 200.0)),
         payment_methods: vec!["SEPA".into(), "Revolut".into()],
-        bitcoin_methods: vec!["lightning".into(), "onchain".into()],
+        bitcoin_methods: vec!["lightning".into(), "on-chain".into()],
         relays: s.app_relays.clone(),
     }];
     s.labels.insert(lucas.pubkey().to_hex(), "lucas".into());

@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(d.currency, "MXN");
         assert_eq!(d.side, "sell");
         assert_eq!(d.premium, 0.0);
-        assert_eq!(d.bitcoin_methods, vec!["onchain", "lightning", "arkade"]);
+        assert_eq!(d.bitcoin_methods, vec!["on-chain", "lightning", "arkade"]);
         assert_eq!(d.relays, DEFAULT_NEGOTIATION_RELAYS);
         assert_eq!(default_api(&[], "USD"), "coingecko");
         assert_eq!(default_api(&[], "VES"), "yadio");
@@ -283,7 +283,7 @@ mod tests {
     fn learns_from_recent_offers() {
         let recent = vec![
             tpl("MXN", 2.0, &["Mercado Pago"], &["lightning"]),
-            tpl("USD", 1.0, &["Zelle"], &["lightning", "onchain"]),
+            tpl("USD", 1.0, &["Zelle"], &["lightning", "on-chain"]),
             tpl(
                 "MXN",
                 0.0,
@@ -329,7 +329,7 @@ mod tests {
                 "USD",
                 0.0,
                 &["Zelle"],
-                &["onchain"],
+                &["on-chain"],
                 &["wss://x/", "wss://y/"],
             ),
             tpl_relays("USD", 0.0, &["Zelle"], &["arkade"], &["wss://y/"]),
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(default_api(&recent, "EUR"), "yadio");
         assert_eq!(default_payment_methods(&recent, "EUR"), vec!["Strike"]);
         // old history without relays
-        let d = defaults(&[tpl("USD", 0.0, &[], &["onchain"])], "MXN");
+        let d = defaults(&[tpl("USD", 0.0, &[], &["on-chain"])], "MXN");
         assert_eq!(d.relays, DEFAULT_NEGOTIATION_RELAYS);
     }
 

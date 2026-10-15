@@ -29,7 +29,7 @@ pub const DM_TTL_SECS: u32 = 30 * 24 * 60 * 60;
 
 /// how the bitcoin side of the trade can be settled
 pub const BITCOIN_METHODS: &[&str] = &[
-    "onchain",
+    "on-chain",
     "rootstock",
     "lightning",
     "cassis",
@@ -38,7 +38,7 @@ pub const BITCOIN_METHODS: &[&str] = &[
 ];
 
 /// bitcoin methods the new offer form starts with when there is no history
-pub const DEFAULT_BITCOIN_METHODS: &[&str] = &["onchain", "lightning", "arkade"];
+pub const DEFAULT_BITCOIN_METHODS: &[&str] = &["on-chain", "lightning", "arkade"];
 
 /// fiat payment methods and the currencies they are common for, `*` meaning all of them.
 /// the new offer form shows the ones for the chosen currency first and hides the rest.

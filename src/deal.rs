@@ -465,7 +465,7 @@ pub fn deviation_pct(quoted: f64, expected: f64) -> f64 {
 pub fn destination_name(bitcoin_method: &str) -> &'static str {
     match bitcoin_method {
         "lightning" => "lightning invoice or address",
-        "onchain" | "liquid" | "rootstock" | "arkade" => "address",
+        "on-chain" | "onchain" | "liquid" | "rootstock" | "arkade" => "address",
         _ => "address or invoice",
     }
 }

@@ -104,7 +104,16 @@ pub struct Message {
     /// the `["trade", …]` tag of a structured message, see `deal.rs`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<Vec<String>>,
+    /// the wrapped event as it went to (or came from) the relays, as json
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub event: String,
+    /// for ours, what each relay answered when we published it
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deliveries: Vec<Delivery>,
 }
+
+/// a relay and its answer to something we published, none while it is still on its way
+pub type Delivery = (String, Option<Result<(), String>>);
 
 /// an ongoing trade with someone: one per peer, as the conversation key is per pair of keys
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]

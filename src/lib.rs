@@ -3,6 +3,7 @@ mod app;
 pub mod deal;
 pub mod form;
 pub mod history;
+mod notify;
 pub mod prices;
 pub mod protocol;
 pub mod store;

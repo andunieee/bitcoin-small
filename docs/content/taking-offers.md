@@ -13,7 +13,7 @@ Each offer shows:
 - **the price**: the market price plus or minus a premium. `+1%` means the bitcoin costs 1% more than the market
   price, and `-1%` means 1% less. The app shows where that market price comes from.
 - **payment**: the ways the other person can send or receive the money, like GCash, a bank transfer, Revolut or cash.
-- **bitcoin via**: how the bitcoin side is sent, like lightning, onchain or liquid.
+- **bitcoin via**: how the bitcoin side is sent, like lightning, on-chain or liquid.
 - **a description**: limits, hours or conditions, in the maker's own words.
 
 <div class="shots">

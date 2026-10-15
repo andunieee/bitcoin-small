@@ -18,7 +18,8 @@ use crate::history::{Outcome, PastTrade};
 use crate::prices::{self, PriceApi, fiat, thousands};
 use crate::protocol::*;
 use crate::store::{
-    DEFAULT_WRITE_RELAYS, ENOUGH_OWN_REPORTS, Message, MyOffer, Store, TRUSTED_PEERS_TO_ASK, Trade,
+    DEFAULT_WRITE_RELAYS, Delivery, ENOUGH_OWN_REPORTS, Message, MyOffer, Store,
+    TRUSTED_PEERS_TO_ASK, Trade,
 };
 use crate::{
     AppWindow, DealRow, DealView, MsgItem, OfferItem, PayItem, PersonItem, RelayAnswer, RelayItem,
@@ -66,12 +67,25 @@ enum TradeRef {
     Past(i64),
 }
 
-/// something we sent, with each relay's answer (none while it is still on its way)
+/// something we published this session, with each relay's answer
 #[derive(Clone)]
 struct Sent {
     id: u64,
     title: String,
-    answers: Vec<(String, Option<Result<(), String>>)>,
+    json: String,
+    answers: Vec<Delivery>,
+}
+
+/// how many of those are kept
+const SENT_KEPT: usize = 200;
+
+/// one entry of the relay report popup
+#[derive(Debug, Clone, PartialEq)]
+enum Report {
+    /// something published this session, by its id
+    Sent(u64),
+    /// a message of a trade, by its id. ours carry how each relay took it.
+    Message(TradeRef, String),
 }
 
 struct App {
@@ -104,8 +118,10 @@ struct App {
     current_profile: Mutex<Option<PubKey>>,
     /// held while quoting prices, so a quote isn't sent twice
     quoting: Mutex<()>,
-    /// what we sent since the relay report popup was last closed, and the id for the next one
+    /// what we published this session, and the id for the next one
     sent: Mutex<(Vec<Sent>, u64)>,
+    /// what the relay report popup shows, empty while it is closed
+    popup: Mutex<Vec<Report>>,
     /// held while looking up or creating our relay list, so we don't publish two
     finding_write_relays: tokio::sync::Mutex<()>,
     /// for the screenshots: nothing is fetched, published or subscribed to
@@ -194,6 +210,7 @@ fn build(store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::Pl
         current_profile: Mutex::new(None),
         quoting: Mutex::new(()),
         sent: Mutex::new((vec![], 0)),
+        popup: Mutex::new(vec![]),
         finding_write_relays: tokio::sync::Mutex::new(()),
         offline,
     });
@@ -452,9 +469,17 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     let a = app.clone();
     ui.on_close_sent(move || {
-        a.sent.lock().unwrap().0.clear();
+        a.popup.lock().unwrap().clear();
         if let Some(ui) = a.ui.upgrade() {
             ui.set_sent_open(false);
+        }
+    });
+
+    let a = app.clone();
+    ui.on_open_message_report(move |id| {
+        let current = *a.current_trade.lock().unwrap();
+        if let Some(which) = current {
+            a.show_report(Report::Message(which, id.into()), true);
         }
     });
 
@@ -579,6 +604,23 @@ impl App {
             .upgrade_in_event_loop(move |ui| ui.set_status(msg.into()));
     }
 
+    /// a system notification about the trade with `peer`, replacing the last one about it.
+    /// unless `always`, only while we aren't looking at the app.
+    fn notify(&self, peer: &PubKey, title: String, body: String, always: bool) {
+        if self.offline {
+            return;
+        }
+        let tag = peer.to_hex();
+        let _ = self.ui.upgrade_in_event_loop(move |ui| {
+            // slint keeps track of it for every backend, but only says so in its private api
+            let active = slint::private_unstable_api::re_exports::WindowInner::from_pub(ui.window())
+                .active();
+            if always || !active {
+                crate::notify::show(&title, &body, &tag);
+            }
+        });
+    }
+
     fn app_relays(&self) -> Vec<String> {
         self.store.lock().unwrap().state.app_relays.clone()
     }
@@ -634,9 +676,14 @@ impl App {
                 let evt = relay_list(&self.sk(), &relays);
                 let app = self.clone();
                 let to = merge_relays(&indexers, &relays);
+                // nothing to report about it, it is published along with whatever needed it
                 tokio::spawn(async move {
-                    let (ok, total) = app.publish("relay list", to, evt).await;
-                    log::info!("relay list published to {}/{total} relays", ok.len());
+                    let answers = app.deliver(&to, evt, |_| {}).await;
+                    log::info!(
+                        "relay list published to {}/{} relays",
+                        accepted(&answers).len(),
+                        answers.len()
+                    );
                 });
                 relays
             }
@@ -701,18 +748,22 @@ impl App {
         events
     }
 
-    /// returns the relays that accepted it, and how many we tried.
-    /// each relay's answer shows up in the relay report popup under `title` as it arrives.
-    async fn publish(&self, title: &str, relays: Vec<String>, evt: Event) -> (Vec<String>, usize) {
-        let total = relays.len();
+    /// publish to each relay, calling `on_answer` with all the answers so far as each one arrives.
+    /// returns them, none for the relays that never answered.
+    async fn deliver(
+        &self,
+        relays: &[String],
+        evt: Event,
+        mut on_answer: impl FnMut(&[Delivery]),
+    ) -> Vec<Delivery> {
         if self.offline {
-            return (vec![], total);
+            return vec![];
         }
         // publish_many skips invalid urls without a word, so catch them here, and use the same
         // normalized urls it reports back with
         let mut urls = vec![];
-        let mut answers = vec![];
-        for relay in &relays {
+        let mut answers: Vec<Delivery> = vec![];
+        for relay in relays {
             match ritualistic::normalize_url(relay) {
                 Ok(url) => {
                     urls.push(url.to_string());
@@ -721,6 +772,37 @@ impl App {
                 Err(err) => answers.push((relay.clone(), Some(Err(format!("invalid url: {err}"))))),
             }
         }
+        on_answer(&answers);
+
+        let mut results = self
+            .net
+            .clone()
+            .publish_many(&urls, evt, PublishOptions::default())
+            .await;
+        while let Some(res) = results.recv().await {
+            let answer = match res.error {
+                None => Ok(()),
+                Some(err) => {
+                    log::warn!("publish to {} failed: {err}", res.relay_url);
+                    Err(err)
+                }
+            };
+            match answers
+                .iter_mut()
+                .find(|(url, a)| *url == res.relay_url && a.is_none())
+            {
+                Some(slot) => slot.1 = Some(answer),
+                None => answers.push((res.relay_url, Some(answer))),
+            }
+            on_answer(&answers);
+        }
+        answers
+    }
+
+    /// returns the relays that accepted it, and how many we tried. it is kept for the relay
+    /// report popup under `title`, which opens on its own when half or more of them failed.
+    async fn publish(&self, title: &str, relays: Vec<String>, evt: Event) -> (Vec<String>, usize) {
+        let total = relays.len();
         let id = {
             let mut sent = self.sent.lock().unwrap();
             let id = sent.1;
@@ -728,59 +810,87 @@ impl App {
             sent.0.push(Sent {
                 id,
                 title: title.to_string(),
-                answers,
+                json: evt.to_string(),
+                answers: vec![],
             });
+            if sent.0.len() > SENT_KEPT {
+                sent.0.remove(0);
+            }
             id
         };
-        self.render_sent(true);
-
-        let mut results = self
-            .net
-            .clone()
-            .publish_many(&urls, evt, PublishOptions::default())
+        let answers = self
+            .deliver(&relays, evt, |answers| {
+                if let Some(s) = self.sent.lock().unwrap().0.iter_mut().find(|s| s.id == id) {
+                    s.answers = answers.to_vec();
+                }
+                self.rerender_report(&Report::Sent(id));
+            })
             .await;
-        let mut ok = vec![];
-        while let Some(res) = results.recv().await {
-            let answer = match res.error {
-                None => {
-                    ok.push(res.relay_url.clone());
-                    Ok(())
-                }
-                Some(err) => {
-                    log::warn!("publish to {} failed: {err}", res.relay_url);
-                    Err(err)
-                }
-            };
-            {
-                // gone if the popup was closed in the meantime
-                let mut sent = self.sent.lock().unwrap();
-                if let Some(slot) = sent
-                    .0
-                    .iter_mut()
-                    .find(|s| s.id == id)
-                    .and_then(|s| {
-                        s.answers
-                            .iter_mut()
-                            .find(|(url, a)| *url == res.relay_url && a.is_none())
-                    })
-                {
-                    slot.1 = Some(answer);
-                }
-            }
-            self.render_sent(false);
+        if mostly_failed(&answers) {
+            self.show_report(Report::Sent(id), false);
         }
-        (ok, total)
+        (accepted(&answers), total)
     }
 
-    /// fill the relay report popup, opening it if `open`
-    fn render_sent(&self, open: bool) {
-        let sent = self.sent.lock().unwrap().0.clone();
+    /// open the relay report popup with `report`, alone or after what it shows already
+    fn show_report(&self, report: Report, alone: bool) {
+        {
+            let mut popup = self.popup.lock().unwrap();
+            if alone {
+                popup.clear();
+            }
+            if !popup.contains(&report) {
+                popup.push(report);
+            }
+        }
+        self.render_popup();
+    }
+
+    /// refresh the popup if it shows `report`
+    fn rerender_report(&self, report: &Report) {
+        if self.popup.lock().unwrap().contains(report) {
+            self.render_popup();
+        }
+    }
+
+    /// fill the relay report popup, open while there is anything in it
+    fn render_popup(&self) {
+        let reports = self.popup.lock().unwrap().clone();
+        let entries: Vec<(String, String, Vec<Delivery>, String)> = reports
+            .iter()
+            .filter_map(|r| match r {
+                Report::Sent(id) => {
+                    let sent = self.sent.lock().unwrap();
+                    let s = sent.0.iter().find(|s| s.id == *id)?;
+                    Some((s.title.clone(), s.json.clone(), s.answers.clone(), String::new()))
+                }
+                Report::Message(which, id) => {
+                    let m = self.find_message(*which, id)?;
+                    let note = if m.mine {
+                        if m.deliveries.is_empty() {
+                            "no record of how the relays took it."
+                        } else {
+                            ""
+                        }
+                    } else {
+                        "received from them, so there is nothing of ours to report."
+                    };
+                    let excerpt: String = m.text.chars().take(80).collect();
+                    let title = format!(
+                        "{}: {excerpt}{}",
+                        if m.mine { "your message" } else { "their message" },
+                        if excerpt.len() < m.text.len() { "…" } else { "" }
+                    );
+                    Some((title, m.event, m.deliveries, note.to_string()))
+                }
+            })
+            .collect();
+        let open = !entries.is_empty();
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
-            let items: Vec<SentItem> = sent
-                .iter()
-                .map(|s| {
-                    let answers: Vec<RelayAnswer> = s
-                        .answers
+            let items: Vec<SentItem> = entries
+                .into_iter()
+                .map(|(title, json, answers, note)| {
+                    let answers: Vec<RelayAnswer> = answers
                         .iter()
                         .map(|(url, answer)| RelayAnswer {
                             url: url.into(),
@@ -798,16 +908,37 @@ impl App {
                         })
                         .collect();
                     SentItem {
-                        title: s.title.clone().into(),
+                        title: title.into(),
+                        note: note.into(),
+                        json: pretty_json(&json).into(),
                         answers: ModelRc::new(VecModel::from(answers)),
                     }
                 })
                 .collect();
             ui.set_sent(ModelRc::new(VecModel::from(items)));
-            if open {
-                ui.set_sent_open(true);
-            }
+            ui.set_sent_open(open);
         });
+    }
+
+    /// a message of an ongoing or past trade
+    fn find_message(&self, which: TradeRef, id: &str) -> Option<Message> {
+        let store = self.store.lock().unwrap();
+        match which {
+            TradeRef::Ongoing(peer) => store
+                .state
+                .trades
+                .get(&peer.to_hex())?
+                .messages
+                .iter()
+                .find(|m| m.id == id)
+                .cloned(),
+            TradeRef::Past(row) => store
+                .history
+                .get(row)?
+                .messages
+                .into_iter()
+                .find(|m| m.id == id),
+        }
     }
 
     /// keep a filter open on each relay, reconnecting forever, calling `on_event` once per event
@@ -1338,6 +1469,8 @@ impl App {
         self.reset_create_form(&ui);
         self.render_trades();
         ui.set_page(0);
+        // to hear about takers
+        crate::notify::request_permission();
         self.status("publishing offer…");
 
         let app = self.clone();
@@ -1464,7 +1597,14 @@ impl App {
         };
         self.ensure_dm_sub(peer, false);
         if is_new {
-            self.status(format!("new trade with {}", self.name(&peer)));
+            let name = self.name(&peer);
+            self.status(format!("new trade with {name}"));
+            self.notify(
+                &peer,
+                format!("{name} wants to trade"),
+                "they contacted you, likely about one of your offers".into(),
+                true,
+            );
             self.render_trades();
         }
     }
@@ -1509,7 +1649,7 @@ impl App {
             return;
         };
         let mut new_pair = None;
-        {
+        let shown = {
             let mut store = self.store.lock().unwrap();
             // whoever signed this could have been either of us: only our local memory of the rumors
             // we created tells us which ones are ours
@@ -1552,14 +1692,30 @@ impl App {
                 .find(|t| t.first().is_some_and(|n| n == deal::TAG))
                 .cloned();
             t.messages.push(Message {
-                id: rumor.id,
+                id: rumor.id.clone(),
                 created_at: rumor.created_at,
                 mine: false,
                 text: rumor.content,
                 action,
+                event: evt.to_string(),
+                deliveries: vec![],
             });
             t.messages.sort_by_key(|m| m.created_at);
+            let shown = t
+                .messages
+                .iter()
+                .zip(shown_messages(t.offer.as_ref(), &t.messages))
+                .find(|(m, _)| m.id == rumor.id)
+                .map(|(_, shown)| shown.text);
+            let summary = t.offer_summary.clone();
             store.persist();
+            (shown, summary)
+        };
+        let name = self.name(&conv.peer);
+        if new_pair.is_some() {
+            self.notify(&conv.peer, format!("{name} took your offer"), shown.1, true);
+        } else if let Some(text) = shown.0 {
+            self.notify(&conv.peer, name, text, false);
         }
         // we need the price of an offer to quote it to its taker
         if let Some(pair) = new_pair.filter(|p| !self.prices.lock().unwrap().contains_key(p)) {
@@ -1612,6 +1768,8 @@ impl App {
         }
         self.ensure_dm_sub(offer.maker, true);
         self.send_ping(offer.maker);
+        // to hear back from them
+        crate::notify::request_permission();
         // there is nothing to pick about a fixed amount, but the maker answers it with the price
         let terms = OfferTerms::from_offer(&offer, false);
         if terms.fixed_amount() {
@@ -1754,11 +1912,16 @@ impl App {
             .iter()
             .zip(shown)
             .map(|(m, shown)| MsgItem {
+                id: m.id.clone().into(),
                 mine: m.mine,
                 text: shown.text.into(),
                 meta: shown.meta,
                 ignored: shown.ignored,
-                time: ago(Timestamp(m.created_at)).into(),
+                time: match delivery_summary(&m.deliveries) {
+                    Some(d) => format!("{} · {d}", ago(Timestamp(m.created_at))),
+                    None => ago(Timestamp(m.created_at)),
+                }
+                .into(),
             })
             .collect();
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
@@ -1947,11 +2110,14 @@ impl App {
                 mine: true,
                 text: rumor.content,
                 action,
+                event: evt.to_string(),
+                deliveries: vec![],
             });
-            state.my_rumors.insert(rumor.id);
+            state.my_rumors.insert(rumor.id.clone());
             store.persist();
-            (relays, needs_ping, evt)
+            (relays, needs_ping, (rumor.id, evt))
         };
+        let (msg_id, evt) = evt;
         self.render_trade();
         self.render_trades();
 
@@ -1964,11 +2130,42 @@ impl App {
                 // give the other side a moment to open the conversation subscription
                 tokio::time::sleep(Duration::from_millis(1500)).await;
             }
-            let (ok, total) = app.publish("message", relays, evt).await;
-            if ok.is_empty() {
-                app.status(format!("message failed to reach any of {total} relays"));
+            let answers = app
+                .deliver(&relays, evt, |answers| {
+                    app.set_deliveries(peer, &msg_id, answers)
+                })
+                .await;
+            app.store.lock().unwrap().persist();
+            if accepted(&answers).is_empty() {
+                app.status(format!(
+                    "message failed to reach any of {} relays",
+                    relays.len()
+                ));
+            }
+            if mostly_failed(&answers) {
+                app.show_report(Report::Message(TradeRef::Ongoing(peer), msg_id), false);
             }
         });
+    }
+
+    /// how the relays took a message of ours so far, kept with it (saved once they all answered)
+    fn set_deliveries(&self, peer: PubKey, msg_id: &str, answers: &[Delivery]) {
+        {
+            let mut store = self.store.lock().unwrap();
+            let Some(m) = store
+                .state
+                .trades
+                .get_mut(&peer.to_hex())
+                .and_then(|t| t.messages.iter_mut().find(|m| m.id == msg_id))
+            else {
+                return;
+            };
+            m.deliveries = answers.to_vec();
+        }
+        if *self.current_trade.lock().unwrap() == Some(TradeRef::Ongoing(peer)) {
+            self.render_trade();
+        }
+        self.rerender_report(&Report::Message(TradeRef::Ongoing(peer), msg_id.to_string()));
     }
 
     /// end the ongoing trade: with a public report (success or failure), or just archived.
@@ -2453,16 +2650,6 @@ fn deal_view(
     let i_get_bitcoin = me == terms.bitcoin_receiver();
     let who = |role: Role| if role == me { "you" } else { "they" };
     let sats = |n: u64| format!("{} sats", thousands(n as f64));
-
-    let method = |m: &Option<String>| {
-        m.as_deref().map(|m| {
-            if m.is_empty() {
-                "agree in the chat".to_string()
-            } else {
-                m.to_string()
-            }
-        })
-    };
     let to_whom = |receiver: Role| if receiver == me { "you" } else { "them" };
 
     // the maker's price is the one that counts. the taker sees how it compares to the source.
@@ -2498,8 +2685,8 @@ fn deal_view(
         ],
         [price.map(|p| ("price".into(), p)), None],
         [
-            method(&deal.bitcoin_method).map(|m| ("bitcoin sent via".into(), m)),
-            method(&deal.payment_method).map(|m| (format!("{cur} sent via"), m)),
+            deal.bitcoin_method.clone().map(|m| (format!("bitcoin sent via"), m)),
+            deal.payment_method.clone().map(|m| (format!("{cur} sent via"), m)),
         ],
         [
             deal.bitcoin_details.clone().map(|d| {
@@ -2647,6 +2834,43 @@ fn past_status(t: &PastTrade) -> String {
     } else {
         format!("{outcome} · \"{}\"", t.comment)
     }
+}
+
+/// the relays that took it
+fn accepted(answers: &[Delivery]) -> Vec<String> {
+    answers
+        .iter()
+        .filter(|(_, a)| matches!(a, Some(Ok(()))))
+        .map(|(url, _)| url.clone())
+        .collect()
+}
+
+/// half or more of the relays we tried didn't take it, counting the ones that never answered
+fn mostly_failed(answers: &[Delivery]) -> bool {
+    let failed = answers.len() - accepted(answers).len();
+    !answers.is_empty() && failed * 2 >= answers.len()
+}
+
+/// "2/3 relays" under one of our messages, or "sending…" until the first one answers
+fn delivery_summary(answers: &[Delivery]) -> Option<String> {
+    if answers.is_empty() {
+        return None;
+    }
+    if answers.iter().all(|(_, a)| a.is_none()) {
+        return Some("sending…".into());
+    }
+    Some(format!(
+        "{}/{} relays",
+        accepted(answers).len(),
+        answers.len()
+    ))
+}
+
+/// json indented for reading, or as it is if it doesn't parse
+fn pretty_json(json: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(json)
+        .and_then(|v| serde_json::to_string_pretty(&v))
+        .unwrap_or_else(|_| json.to_string())
 }
 
 fn split_list(s: &str) -> Vec<String> {

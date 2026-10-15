@@ -8,11 +8,7 @@ use crate::prices;
 use crate::protocol::{payment_methods_for, DEFAULT_BITCOIN_METHODS};
 
 /// relays where people reach us about an offer.
-#[cfg(not(debug_assertions))]
 pub const DEFAULT_NEGOTIATION_RELAYS: &[&str] = &["wss://nostr.wine"];
-#[cfg(debug_assertions)]
-pub const DEFAULT_NEGOTIATION_RELAYS: &[&str] =
-    &["wss://nostr.wine", "wss://nos.lol", "wss://relay.primal.net"];
 
 /// how many of our past offers the form learns from
 pub const RECENT_OFFERS: usize = 5;

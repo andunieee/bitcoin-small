@@ -26,7 +26,7 @@ Your reputation, the reports people write about you, is tied to that key. If you
 > Back it up: tap **Reveal nsec** in Settings and write it down somewhere safe. Anyone who has your nsec can act as
 > you, so never share it, and never paste it into a website or chat.
 
-If you had a key before, paste its nsec under **Settings → Import a key**. Other people will recognize you and see
+If you had a key before, paste its nsec under **Settings → Reset identity**. Other people will recognize you and see
 the reports written about you. Your trades, messages and the reports you wrote stay on the device they happened on,
 so on a new device the app doesn't yet know who you trust. Close your open offers and end your ongoing trades first.
 

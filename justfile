@@ -14,10 +14,6 @@ android-install:
     cargo apk build --lib --target aarch64-linux-android
     adb install -r ~/.cache/cargo-target/debug/apk/bitcoin-smol.apk
 
-# run the desktop app
-desktop:
-    cargo run
-
 # serve the web build on http://127.0.0.1:8080, rebuilding on changes
 web:
     trunk serve web/index.html

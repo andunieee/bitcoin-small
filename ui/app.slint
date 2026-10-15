@@ -1,10 +1,11 @@
-import { Button, LineEdit, TextEdit, ComboBox, CheckBox, ScrollView, ListView, Switch, Palette } from "std-widgets.slint";
+import { LineEdit, TextEdit, ComboBox, CheckBox, ScrollView, ListView, Switch, Palette } from "std-widgets.slint";
 
 export struct OfferItem {
     id: string,
     maker: string,
-    maker-short: string,
-    maker-label: string,
+    // our label for them, or their short key
+    maker-name: string,
+    maker-color: color,
     mine: bool,
     side: string,
     currency: string,
@@ -23,8 +24,8 @@ export struct OfferItem {
 export struct TradeItem {
     // the peer's npub for an ongoing trade, the history id for a past one
     key: string,
-    peer-short: string,
-    label: string,
+    peer-name: string,
+    peer-color: color,
     summary: string,
     status: string,
     last: string,
@@ -34,8 +35,8 @@ export struct TradeItem {
 export struct TradeView {
     ongoing: bool,
     peer: string,
-    peer-short: string,
-    label: string,
+    peer-name: string,
+    peer-color: color,
     blocked: bool,
     summary: string,
 }
@@ -89,7 +90,11 @@ export struct MsgItem {
 }
 
 export struct ReportItem {
-    author-short: string,
+    author-name: string,
+    author-color: color,
+    // who it is about, for our own reports on our profile. empty otherwise.
+    subject-name: string,
+    subject-color: color,
     success: bool,
     comment: string,
     time: string,
@@ -99,6 +104,7 @@ export struct PersonItem {
     npub: string,
     short: string,
     label: string,
+    color: color,
 }
 
 export struct RelayItem {
@@ -169,6 +175,7 @@ component NavButton inherits Rectangle {
     height: 52px;
     background: area.pressed ? Palette.selection-background.transparentize(60%) : transparent;
     area := TouchArea {
+        mouse-cursor: pointer;
         clicked => {
             root.clicked();
         }
@@ -200,21 +207,45 @@ component SideBadge inherits Rectangle {
     }
 }
 
-// our private name for someone, styled so it stands out from npubs
-component Label inherits Rectangle {
+// someone, by our label for them or by their short key, in a color that comes from their key
+component Identity inherits Text {
+    in property <color> tint;
+    font-weight: 700;
+    // the tint is dark enough to read on light backgrounds
+    color: Palette.color-scheme == ColorScheme.dark ? root.tint.mix(white, 0.6) : root.tint;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+// the std button can't show a pointer cursor, its own touch area always sets the default one
+component Button inherits Rectangle {
     in property <string> text;
-    background: #f7931a;
+    in property <bool> primary;
+    in property <bool> enabled: true;
+    callback clicked;
+    min-height: 32px;
+    max-height: 32px;
+    min-width: 32px;
+    preferred-width: t.preferred-width + 24px;
+    horizontal-stretch: 0;
     border-radius: 4px;
-    height: 20px;
-    width: min(t.preferred-width + 12px, 180px);
+    border-width: root.primary ? 0 : 1px;
+    border-color: Palette.border.transparentize(40%);
+    opacity: root.enabled ? 1 : 0.5;
+    background: (root.primary ? Palette.accent-background : Palette.control-background)
+        .darker(area.pressed ? 0.15 : area.has-hover ? 0.07 : 0);
+    area := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
     t := Text {
         text: root.text;
-        width: parent.width - 12px;
-        overflow: elide;
+        color: root.primary ? Palette.accent-foreground : Palette.control-foreground;
         horizontal-alignment: center;
-        color: white;
-        font-size: 12px;
-        font-weight: 700;
         vertical-alignment: center;
     }
 }
@@ -241,6 +272,22 @@ component Choices inherits Card {
     }
 }
 
+// what comes next in a trade, and who we are in it
+component DealTurn inherits VerticalLayout {
+    in property <DealView> deal;
+    spacing: 8px;
+    Text {
+        text: root.deal.next-step;
+        color: root.deal.my-turn || root.deal.concluded ? #f7931a : Palette.foreground;
+        font-weight: 700;
+        wrap: word-wrap;
+    }
+
+    Muted {
+        text: root.deal.role;
+    }
+}
+
 // where a trade stands and the forms that move it forward. picking something sends a message.
 component DealPanel inherits VerticalLayout {
     in property <DealView> deal;
@@ -256,18 +303,13 @@ component DealPanel inherits VerticalLayout {
     // why the details can't be sent, empty when they can
     pure callback check-details(string) -> string;
     property <string> details-error: root.check-details(root.draft);
+    // on narrow screens whose turn it is goes under what has been agreed, next to the forms
+    in property <bool> compact;
     spacing: 8px;
     alignment: start;
 
-    Text {
-        text: root.deal.next-step;
-        color: root.deal.my-turn || root.deal.concluded ? #f7931a : Palette.foreground;
-        font-weight: 700;
-        wrap: word-wrap;
-    }
-
-    Muted {
-        text: root.deal.role;
+    if !root.compact: DealTurn {
+        deal: root.deal;
     }
 
     if root.deal.price-warning != "": Rectangle {
@@ -319,6 +361,10 @@ component DealPanel inherits VerticalLayout {
                 }
             }
         }
+    }
+
+    if root.compact: DealTurn {
+        deal: root.deal;
     }
 
     if root.deal.pick-amount: Card {
@@ -482,38 +528,26 @@ component DealPanel inherits VerticalLayout {
     }
 }
 
-// what can be done with a whole trade, from the header of its page
+// what can be done with an ongoing trade, from the header of its page. a trade can only be
+// deleted once it is over.
 component TradeActions inherits HorizontalLayout {
-    in property <bool> ongoing;
-    in-out property <bool> confirm-delete;
     callback conclude();
     callback archive();
-    callback delete();
     spacing: 6px;
     alignment: end;
-    if root.ongoing: Button {
+    Button {
         text: "Conclude";
         y: (parent.height - self.height) / 2;
         clicked => {
             root.conclude();
         }
     }
-    if root.ongoing: Button {
+
+    Button {
         text: "Archive";
         y: (parent.height - self.height) / 2;
         clicked => {
             root.archive();
-        }
-    }
-    Button {
-        text: root.confirm-delete ? "Really delete?" : "Delete";
-        y: (parent.height - self.height) / 2;
-        clicked => {
-            if root.confirm-delete {
-                root.delete();
-            } else {
-                root.confirm-delete = true;
-            }
         }
     }
 }
@@ -594,6 +628,7 @@ component TradeCard inherits Rectangle {
     border-color: Palette.border;
     opacity: root.item.blocked ? 0.5 : 1;
     TouchArea {
+        mouse-cursor: pointer;
         clicked => {
             root.clicked();
         }
@@ -602,18 +637,9 @@ component TradeCard inherits Rectangle {
     VerticalLayout {
         padding: 10px;
         spacing: 2px;
-        HorizontalLayout {
-            spacing: 6px;
-            if root.item.label != "": Label {
-                text: root.item.label;
-            }
-            Text {
-                text: root.item.peer-short + (root.item.blocked ? " (blocked)" : "");
-                font-weight: root.item.label != "" ? 400 : 700;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
+        Identity {
+            text: root.item.peer-name + (root.item.blocked ? " (blocked)" : "");
+            tint: root.item.peer-color;
         }
 
         Text {
@@ -655,6 +681,8 @@ export component AppWindow inherits Window {
     in-out property <string> filter-side: "all";
     in-out property <string> filter-currency: "all";
     in property <bool> loading;
+    // until we make or take an offer, the market points to the guide
+    in property <bool> newcomer;
     in property <OfferItem> current-offer;
     callback refresh-offers();
     callback filters-changed();
@@ -678,6 +706,7 @@ export component AppWindow inherits Window {
     in-out property <bool> create-amount-linked: true;
     in-out property <string> create-other-payments;
     in-out property <string> create-relays;
+    in-out property <string> create-publish-relays;
     in-out property <string> create-description;
     in property <string> create-preview;
     in-out property <bool> create-custom;
@@ -717,7 +746,8 @@ export component AppWindow inherits Window {
 
     // profile
     in property <string> profile-npub;
-    in property <string> profile-short;
+    in property <string> profile-name;
+    in property <color> profile-color;
     in property <string> profile-label;
     in property <bool> profile-blocked;
     in property <bool> profile-is-me;
@@ -742,6 +772,7 @@ export component AppWindow inherits Window {
     callback reveal-nsec();
     callback open-docs();
     callback import-nsec(string);
+    in-out property <bool> show-reset-identity;
 
     // relay report popup, shown when most relays failed to take something we sent
     in property <[SentItem]> sent;
@@ -829,7 +860,7 @@ export component AppWindow inherits Window {
                 if root.page == 0: VerticalLayout {
                     padding: 16px;
                     spacing: 8px;
-                    Tip {
+                    if root.newcomer: Tip {
                         text: "New here? Read how this works and how to trade safely →";
                         TouchArea {
                             mouse-cursor: pointer;
@@ -877,6 +908,7 @@ export component AppWindow inherits Window {
                             padding-right: 6px;
                             Card {
                                 TouchArea {
+                                    mouse-cursor: pointer;
                                     clicked => {
                                         root.open-offer(offer.id);
                                     }
@@ -924,13 +956,20 @@ export component AppWindow inherits Window {
                                         font-size: 13px;
                                     }
                                     HorizontalLayout {
-                                        spacing: 6px;
-                                        if offer.maker-label != "": Label {
-                                            text: offer.maker-label;
+                                        spacing: 4px;
+                                        if offer.mine: Muted {
+                                            text: "you";
+                                            vertical-alignment: center;
+                                        }
+                                        if !offer.mine: Identity {
+                                            text: offer.maker-name;
+                                            tint: offer.maker-color;
+                                            font-size: 12px;
                                         }
                                         Muted {
-                                            text: (offer.mine ? "you" : offer.maker-short) + " · " + offer.age;
+                                            text: "· " + offer.age;
                                             vertical-alignment: center;
+                                            horizontal-stretch: 1;
                                         }
                                     }
                                 }
@@ -1006,7 +1045,7 @@ export component AppWindow inherits Window {
                                 }
                             }
                         }
-                        if root.current-offer.maker-label != "": HorizontalLayout {
+                        if !root.current-offer.mine: HorizontalLayout {
                             spacing: 6px;
                             alignment: start;
                             Text {
@@ -1014,12 +1053,16 @@ export component AppWindow inherits Window {
                                 vertical-alignment: center;
                             }
 
-                            Label {
-                                text: root.current-offer.maker-label;
+                            Identity {
+                                text: root.current-offer.maker-name;
+                                tint: root.current-offer.maker-color;
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.open-profile(root.current-offer.maker);
+                                    }
+                                }
                             }
-                        }
-                        Muted {
-                            text: "maker: " + root.current-offer.maker;
                         }
 
                         Button {
@@ -1029,11 +1072,33 @@ export component AppWindow inherits Window {
                             }
                         }
 
-                        if !root.current-offer.mine: Button {
-                            text: "Contact maker";
-                            primary: true;
-                            clicked => {
-                                root.contact-maker(root.current-offer.id);
+                        // from the taker's point of view, like the badge
+                        if !root.current-offer.mine: Rectangle {
+                            height: 40px;
+                            border-radius: 4px;
+                            border-width: 2px;
+                            border-color: #f7931a;
+                            background: Palette.control-background.darker(take.pressed ? 0.15 : take.has-hover ? 0.07 : 0);
+                            take := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.contact-maker(root.current-offer.id);
+                                }
+                            }
+
+                            HorizontalLayout {
+                                alignment: center;
+                                spacing: 5px;
+                                Text {
+                                    text: root.current-offer.side == "sell" ? "Buy Bitcoin from" : "Sell Bitcoin to";
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+
+                                Identity {
+                                    text: root.current-offer.maker-name;
+                                    tint: root.current-offer.maker-color;
+                                }
                             }
                         }
                         if root.current-offer.mine: Button {
@@ -1202,6 +1267,7 @@ export component AppWindow inherits Window {
                             color: #f7931a;
                             font-size: 13px;
                             TouchArea {
+                                mouse-cursor: pointer;
                                 clicked => {
                                     root.create-more-payments = !root.create-more-payments;
                                 }
@@ -1263,6 +1329,20 @@ export component AppWindow inherits Window {
                                         root.create-api-changed(a);
                                     }
                                 }
+                            }
+
+                            Text {
+                                text: "relays where to publish this offer";
+                                font-weight: 700;
+                            }
+
+                            LineEdit {
+                                text <=> root.create-publish-relays;
+                                placeholder-text: "wss://…, comma-separated";
+                            }
+
+                            Muted {
+                                text: "the relays in your relay list (NIP-65) get it too, that's where the people who trust you look for your offers.";
                             }
 
                             Text {
@@ -1393,56 +1473,37 @@ export component AppWindow inherits Window {
                                         wrap: word-wrap;
                                     }
 
-                                    HorizontalLayout {
-                                        spacing: 6px;
-                                        alignment: start;
-                                        if root.trade.label != "": Label {
-                                            text: root.trade.label;
-                                        }
-                                        Text {
-                                            text: root.trade.peer-short + (root.trade.blocked ? " (blocked)" : "");
-                                            color: #f7931a;
-                                            font-size: 13px;
-                                            vertical-alignment: center;
-                                            overflow: elide;
-                                            TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    root.open-profile(root.trade.peer);
-                                                }
+                                    Identity {
+                                        text: root.trade.peer-name + (root.trade.blocked ? " (blocked)" : "");
+                                        tint: root.trade.peer-color;
+                                        font-size: 13px;
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                root.open-profile(root.trade.peer);
                                             }
                                         }
                                     }
                                 }
 
-                                if !root.trade-concluding && root.trade-wide: TradeActions {
-                                    ongoing: root.trade.ongoing;
-                                    confirm-delete <=> root.trade-confirm-delete;
+                                if root.trade.ongoing && !root.trade-concluding && root.trade-wide: TradeActions {
                                     conclude => {
                                         root.trade-concluding = true;
                                     }
                                     archive => {
                                         root.archive-trade();
                                     }
-                                    delete => {
-                                        root.delete-trade();
-                                    }
                                 }
                             }
 
                             // on narrow screens they go under it, so the offer keeps the width
-                            if !root.trade-concluding && !root.trade-wide: TradeActions {
+                            if root.trade.ongoing && !root.trade-concluding && !root.trade-wide: TradeActions {
                                 alignment: start;
-                                ongoing: root.trade.ongoing;
-                                confirm-delete <=> root.trade-confirm-delete;
                                 conclude => {
                                     root.trade-concluding = true;
                                 }
                                 archive => {
                                     root.archive-trade();
-                                }
-                                delete => {
-                                    root.delete-trade();
                                 }
                             }
 
@@ -1493,6 +1554,7 @@ export component AppWindow inherits Window {
                             width: sv-deal-top.visible-width;
                             padding-right: 6px;
                             dp-top := DealPanel {
+                                compact: true;
                                 deal: root.deal;
                                 confirming <=> root.trade-confirming;
                                 draft <=> root.trade-details-draft;
@@ -1621,8 +1683,25 @@ export component AppWindow inherits Window {
                                     }
                                 }
                             }
-                            if !root.trade.ongoing: Muted {
-                                text: "this trade is over. messages are kept here as they were.";
+                            if !root.trade.ongoing: HorizontalLayout {
+                                spacing: 8px;
+                                Muted {
+                                    text: "this trade is over. messages are kept here as they were.";
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+
+                                Button {
+                                    text: root.trade-confirm-delete ? "Really delete?" : "Delete";
+                                    y: (parent.height - self.height) / 2;
+                                    clicked => {
+                                        if root.trade-confirm-delete {
+                                            root.delete-trade();
+                                        } else {
+                                            root.trade-confirm-delete = true;
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -1671,8 +1750,13 @@ export component AppWindow inherits Window {
                         padding: 16px;
                         spacing: 10px;
                         alignment: start;
-                        Title {
-                            text: root.profile-is-me ? "You" : root.profile-label != "" ? root.profile-label : root.profile-short;
+                        if root.profile-is-me: Title {
+                            text: "You";
+                        }
+                        if !root.profile-is-me: Identity {
+                            text: root.profile-name;
+                            tint: root.profile-color;
+                            font-size: 20px;
                         }
 
                         LineEdit {
@@ -1735,10 +1819,26 @@ export component AppWindow inherits Window {
                                     font-weight: 700;
                                 }
 
-                                Text {
-                                    text: rep.comment != "" ? rep.comment : (rep.success ? "successful trade" : "failed trade");
-                                    wrap: word-wrap;
+                                VerticalLayout {
                                     horizontal-stretch: 1;
+                                    if rep.subject-name != "": HorizontalLayout {
+                                        spacing: 4px;
+                                        Muted {
+                                            text: "with";
+                                            vertical-alignment: center;
+                                        }
+
+                                        Identity {
+                                            text: rep.subject-name;
+                                            tint: rep.subject-color;
+                                            font-size: 12px;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                    Text {
+                                        text: rep.comment != "" ? rep.comment : (rep.success ? "successful trade" : "failed trade");
+                                        wrap: word-wrap;
+                                    }
                                 }
 
                                 Muted {
@@ -1773,8 +1873,24 @@ export component AppWindow inherits Window {
                                         wrap: word-wrap;
                                     }
 
-                                    Muted {
-                                        text: "by " + rep.author-short + " · " + rep.time;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        Muted {
+                                            text: "by";
+                                            vertical-alignment: center;
+                                        }
+
+                                        Identity {
+                                            text: rep.author-name;
+                                            tint: rep.author-color;
+                                            font-size: 12px;
+                                        }
+
+                                        Muted {
+                                            text: "· " + rep.time;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                        }
                                     }
                                 }
                             }
@@ -1840,6 +1956,7 @@ export component AppWindow inherits Window {
                             padding-right: 6px;
                             Card {
                                 TouchArea {
+                                    mouse-cursor: pointer;
                                     clicked => {
                                         root.open-profile(person.npub);
                                     }
@@ -1848,13 +1965,16 @@ export component AppWindow inherits Window {
                                 HorizontalLayout {
                                     padding: 10px;
                                     spacing: 8px;
-                                    Label {
+                                    Identity {
                                         text: person.label;
+                                        tint: person.color;
                                     }
 
                                     Muted {
                                         text: person.short;
                                         vertical-alignment: center;
+                                        horizontal-alignment: right;
+                                        horizontal-stretch: 1;
                                     }
                                 }
                             }
@@ -1902,26 +2022,6 @@ export component AppWindow inherits Window {
                         }
 
                         Title {
-                            text: "Import a key";
-                        }
-
-                        HorizontalLayout {
-                            spacing: 8px;
-                            import-field := LineEdit {
-                                placeholder-text: "nsec1…";
-                                input-type: password;
-                            }
-
-                            Button {
-                                text: "Import";
-                                enabled: import-field.text != "";
-                                clicked => {
-                                    root.import-nsec(import-field.text);
-                                    import-field.text = "";
-                                }
-                            }
-                        }
-                        Title {
                             text: "Relays";
                         }
 
@@ -1960,6 +2060,43 @@ export component AppWindow inherits Window {
                                 clicked => {
                                     root.add-relay(new-relay.text);
                                     new-relay.text = "";
+                                }
+                            }
+                        }
+
+                        // out of the way, as it replaces who we are
+                        Text {
+                            text: (root.show-reset-identity ? "▾" : "▸") + " Reset identity";
+                            color: #c62828;
+                            font-weight: 700;
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.show-reset-identity = !root.show-reset-identity;
+                                }
+                            }
+                        }
+
+                        if root.show-reset-identity: VerticalLayout {
+                            spacing: 8px;
+                            Muted {
+                                text: "Switch to another key you used before. This one stops being yours here: its trade reports stay with it. Save its nsec first if you may want it back. Only possible with no open offers or ongoing trades.";
+                            }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                import-field := LineEdit {
+                                    placeholder-text: "nsec1…";
+                                    input-type: password;
+                                }
+
+                                Button {
+                                    text: "Import";
+                                    enabled: import-field.text != "";
+                                    clicked => {
+                                        root.import-nsec(import-field.text);
+                                        import-field.text = "";
+                                    }
                                 }
                             }
                         }

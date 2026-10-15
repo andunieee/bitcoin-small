@@ -30,7 +30,7 @@ No history isn't a red flag in itself: everyone starts with none. It just means 
 
 ## Contact and agree
 
-Tap **Contact maker** to open a private chat. Next to it, the trade shows what has been agreed so far and what has
+Tap **Buy Bitcoin from …** (or **Sell Bitcoin to …**) to open a private chat. Next to it, the trade shows what has been agreed so far and what has
 to happen next:
 
 1. you pick the amount, and how the bitcoin and the money are sent, among what the offer allows,

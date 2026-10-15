@@ -981,6 +981,10 @@ impl App {
     }
 
     fn relays_changed(self: &Arc<Self>) {
+        let relays = self.app_relays().join(", ");
+        let _ = self
+            .ui
+            .upgrade_in_event_loop(move |ui| ui.set_create_publish_relays(relays.into()));
         self.render_relays();
         self.restart_ping_sub();
         self.refresh_offers();
@@ -1239,8 +1243,8 @@ impl App {
         OfferItem {
             id: o.id.to_hex().into(),
             maker: o.maker.to_npub().into(),
-            maker_short: short_npub(&o.maker).into(),
-            maker_label: self.label(&o.maker).into(),
+            maker_name: self.name(&o.maker).into(),
+            maker_color: key_color(&o.maker),
             mine: o.maker == self.me(),
             side: o.side.as_str().into(),
             currency: o.currency.clone().into(),
@@ -1290,6 +1294,7 @@ impl App {
         let recent = self.store.lock().unwrap().state.recent_offers.clone();
         let d = form::defaults(&recent, &self.locale_currency);
         ui.set_create_relays(d.relays.join(", ").into());
+        ui.set_create_publish_relays(self.app_relays().join(", ").into());
         ui.set_create_side(d.side.into());
         ui.set_create_currency(d.currency.clone().into());
         ui.set_create_premium(prices::format_premium(d.premium).into());
@@ -1413,6 +1418,15 @@ impl App {
             self.status("add at least one relay for the negotiation");
             return;
         }
+        let publish_to: Vec<String> = split_list(&ui.get_create_publish_relays())
+            .iter()
+            .filter_map(|r| ritualistic::normalize_url(r).ok())
+            .map(|u| u.to_string())
+            .collect();
+        if publish_to.is_empty() {
+            self.status("add at least one relay to publish the offer to");
+            return;
+        }
 
         let template = OfferTemplate {
             side: ui.get_create_side().into(),
@@ -1476,7 +1490,7 @@ impl App {
         let app = self.clone();
         tokio::spawn(async move {
             let id = evt.id;
-            let relays = merge_relays(&app.app_relays(), &app.my_write_relays(true).await);
+            let relays = merge_relays(&publish_to, &app.my_write_relays(true).await);
             let (ok, total) = app.publish("offer", relays, evt).await;
             app.status(format!("offer published to {}/{total} relays", ok.len()));
             let mut store = app.store.lock().unwrap();
@@ -1899,13 +1913,8 @@ impl App {
         });
         let s = &store.state;
         view.peer = peer.to_npub().into();
-        view.peer_short = short_npub(&peer).into();
-        view.label = s
-            .labels
-            .get(&peer.to_hex())
-            .cloned()
-            .unwrap_or_default()
-            .into();
+        view.peer_name = display_name(&s.labels, &peer).into();
+        view.peer_color = key_color(&peer);
         view.blocked = s.blocked.contains(&peer.to_hex());
         drop(store);
         let msgs: Vec<MsgItem> = messages
@@ -2197,21 +2206,12 @@ impl App {
         self.leave_trade();
     }
 
-    /// forget a trade without keeping it anywhere
+    /// forget a trade that is over, concluded or archived, without keeping it anywhere
     fn delete_trade(self: &Arc<Self>) {
-        let Some(which) = *self.current_trade.lock().unwrap() else {
+        let Some(TradeRef::Past(id)) = *self.current_trade.lock().unwrap() else {
             return;
         };
-        match which {
-            TradeRef::Ongoing(peer) => {
-                let mut store = self.store.lock().unwrap();
-                store.state.trades.remove(&peer.to_hex());
-                store.persist();
-                drop(store);
-                self.dm_subs.lock().unwrap().remove(&peer.to_hex());
-            }
-            TradeRef::Past(id) => self.store.lock().unwrap().history.delete(id),
-        }
+        self.store.lock().unwrap().history.delete(id);
         self.leave_trade();
     }
 
@@ -2228,7 +2228,7 @@ impl App {
             .iter()
             .map(|o| self.offer_item(o))
             .collect();
-        let (ongoing, past) = {
+        let (ongoing, past, made_offers) = {
             let store = self.store.lock().unwrap();
             let s = &store.state;
             let mut trades: Vec<_> = s.trades.iter().collect();
@@ -2246,8 +2246,8 @@ impl App {
                     let pk: PubKey = hex.parse().ok()?;
                     Some(TradeItem {
                         key: pk.to_npub().into(),
-                        peer_short: short_npub(&pk).into(),
-                        label: s.labels.get(hex).cloned().unwrap_or_default().into(),
+                        peer_name: display_name(&s.labels, &pk).into(),
+                        peer_color: key_color(&pk),
                         summary: t.offer_summary.clone().into(),
                         status: trade_status(t).into(),
                         last: t
@@ -2272,8 +2272,8 @@ impl App {
                     let pk: PubKey = t.peer.parse().ok()?;
                     Some(TradeItem {
                         key: t.id.to_string().into(),
-                        peer_short: short_npub(&pk).into(),
-                        label: labels.get(&t.peer).cloned().unwrap_or_default().into(),
+                        peer_name: display_name(&labels, &pk).into(),
+                        peer_color: key_color(&pk),
                         summary: t.offer_summary.clone().into(),
                         status: past_status(t).into(),
                         last: ago(Timestamp(t.ended_at)).into(),
@@ -2281,9 +2281,11 @@ impl App {
                     })
                 })
                 .collect();
-            (ongoing, past)
+            (ongoing, past, !s.recent_offers.is_empty())
         };
+        let newcomer = !made_offers && open.is_empty() && ongoing.is_empty() && past.is_empty();
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
+            ui.set_newcomer(newcomer);
             ui.set_my_offers(ModelRc::new(VecModel::from(open)));
             ui.set_ongoing_trades(ModelRc::new(VecModel::from(ongoing)));
             ui.set_past_trades(ModelRc::new(VecModel::from(past)));
@@ -2338,12 +2340,14 @@ impl App {
         self.render_people();
         self.render_profile(peer, false);
         let label = label.to_string();
+        let name = self.name(&peer);
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
-            ui.set_profile_label(label.clone().into());
+            ui.set_profile_label(label.into());
+            ui.set_profile_name(name.clone().into());
             // the offer page keeps a copy of the offer, so the back button would show the old label
             let mut offer = ui.get_current_offer();
             if offer.maker.as_str() == peer.to_npub() {
-                offer.maker_label = label.into();
+                offer.maker_name = name.into();
                 ui.set_current_offer(offer);
             }
         });
@@ -2370,6 +2374,7 @@ impl App {
                     npub: npub.into(),
                     short: short_npub(&pk).into(),
                     label: label.clone().into(),
+                    color: key_color(&pk),
                 })
             })
             .collect();
@@ -2384,12 +2389,14 @@ impl App {
         let blocked = self.is_blocked(&who);
         let is_me = who == self.me();
         let label = self.label(&who);
+        let name = self.name(&who);
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
             if ui.get_page() != 5 {
                 ui.set_back_page(ui.get_page());
             }
             ui.set_profile_npub(who.to_npub().into());
-            ui.set_profile_short(short_npub(&who).into());
+            ui.set_profile_name(name.into());
+            ui.set_profile_color(key_color(&who));
             ui.set_profile_blocked(blocked);
             ui.set_profile_label(label.into());
             ui.set_profile_is_me(is_me);
@@ -2528,21 +2535,19 @@ impl App {
 // ---------------------------------------------------------------------------------- helpers
 
 fn report_item(labels: &BTreeMap<String, String>, e: &Event, show_subject: bool) -> ReportItem {
-    let comment = if show_subject {
-        let subject = e
-            .tags
-            .find("p")
-            .and_then(|t| t[1].parse::<PubKey>().ok())
-            .map(|pk| display_name(labels, &pk))
-            .unwrap_or_default();
-        format!("with {subject}: {}", e.content)
-    } else {
-        e.content.clone()
-    };
+    let subject = show_subject
+        .then(|| e.tags.find("p").and_then(|t| t[1].parse::<PubKey>().ok()))
+        .flatten();
     ReportItem {
-        author_short: display_name(labels, &e.pubkey).into(),
+        author_name: display_name(labels, &e.pubkey).into(),
+        author_color: key_color(&e.pubkey),
+        subject_name: subject
+            .map(|pk| display_name(labels, &pk))
+            .unwrap_or_default()
+            .into(),
+        subject_color: subject.map(|pk| key_color(&pk)).unwrap_or_default(),
         success: e.kind == KIND_TRADE_SUCCESS,
-        comment: comment.into(),
+        comment: e.content.clone().into(),
         time: ago(e.created_at).into(),
     }
 }
@@ -2903,6 +2908,37 @@ fn display_name(labels: &BTreeMap<String, String>, pk: &PubKey) -> String {
         .get(&pk.to_hex())
         .cloned()
         .unwrap_or_else(|| short_npub(pk))
+}
+
+/// a color of their own for someone, so the same key always looks the same. picked by hue in
+/// oklch, where every hue at the same lightness reads about as well on a light background.
+fn key_color(pk: &PubKey) -> slint::Color {
+    let hex = pk.to_hex();
+    let seed = u32::from_str_radix(&hex[..8], 16).unwrap_or_default();
+    let hue = (seed % 360) as f32;
+    oklch(0.52, 0.14, hue)
+}
+
+fn oklch(l: f32, c: f32, hue: f32) -> slint::Color {
+    let (a, b) = (c * hue.to_radians().cos(), c * hue.to_radians().sin());
+    let l_ = (l + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
+    let m_ = (l - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
+    let s_ = (l - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
+    let linear = [
+        4.076_741_7 * l_ - 3.307_711_6 * m_ + 0.230_969_94 * s_,
+        -1.268_438 * l_ + 2.609_757_4 * m_ - 0.341_319_38 * s_,
+        -0.004_196_086_3 * l_ - 0.703_418_6 * m_ + 1.707_614_7 * s_,
+    ];
+    let [r, g, b] = linear.map(|v| {
+        let v = v.clamp(0.0, 1.0);
+        let srgb = if v <= 0.003_130_8 {
+            12.92 * v
+        } else {
+            1.055 * v.powf(1.0 / 2.4) - 0.055
+        };
+        (srgb * 255.0).round() as u8
+    });
+    slint::Color::from_rgb_u8(r, g, b)
 }
 
 fn short_npub(pk: &PubKey) -> String {

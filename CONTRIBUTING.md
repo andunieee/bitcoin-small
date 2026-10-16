@@ -12,7 +12,7 @@
 | `src/history.rs`  | past trades, in redb                                                                                                    |
 | `src/app.rs`      | relay subscriptions, publishing, and the glue to the UI                                                                 |
 | `src/app/screenshots.rs` | renders the screenshots in `docs/static/screenshots` offscreen, over made-up data                                |
-| `ui/app.slint`    | the interface: market, offer, new offer, trades, trade, profile, people, settings                                       |
+| `ui/app.slint`    | the shell: `AppWindow` state, header, page dispatch, bottom nav, relay popup. pages live in `ui/pages/`, shared pieces in `ui/widgets.slint`, `ui/deal.slint`, `ui/trade_widgets.slint`, structs in `ui/models.slint` |
 | `src/lib.rs`      | Android entry point (`android_main`)                                                                                    |
 | `src/main.rs`     | desktop entry point, and the web entry point when built for wasm                                                        |
 | `web/index.html`  | the page for the web build, with the canvas the app draws into                                                          |

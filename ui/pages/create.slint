@@ -1,0 +1,295 @@
+import { LineEdit, TextEdit, ComboBox, CheckBox, ScrollView, Switch } from "std-widgets.slint";
+import { PayItem } from "../models.slint";
+import { Muted, Title, Button } from "../widgets.slint";
+
+export component CreatePage inherits ScrollView {
+    in property <[string]> create-currencies;
+    in property <[string]> create-apis;
+    in-out property <[PayItem]> payment-options;
+    in-out property <[PayItem]> payment-more;
+    in-out property <[PayItem]> bitcoin-options;
+    in-out property <string> create-side;
+    in-out property <string> create-currency;
+    in-out property <string> create-api;
+    in-out property <string> create-premium;
+    in-out property <string> create-amount-min;
+    in-out property <string> create-amount-max;
+    in-out property <bool> create-amount-linked;
+    in-out property <string> create-other-payments;
+    in-out property <string> create-relays;
+    in-out property <string> create-publish-relays;
+    in-out property <string> create-description;
+    in property <string> create-preview;
+    in-out property <bool> create-custom;
+    in-out property <bool> create-more-payments;
+    callback create-currency-changed(string);
+    callback create-api-changed(string);
+    callback create-premium-changed();
+    callback toggle-payment(string, bool);
+    callback toggle-bitcoin(string, bool);
+    callback publish-offer();
+
+    content-width: self.visible-width;
+
+    VerticalLayout {
+        width: root.visible-width;
+        padding: 16px;
+        spacing: 12px;
+        alignment: start;
+        Title {
+            text: "New offer";
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: "I want to";
+                vertical-alignment: center;
+            }
+
+            ComboBox {
+                width: 80px;
+                model: ["sell", "buy"];
+                current-value <=> root.create-side;
+            }
+
+            Text {
+                text: "bitcoin for";
+                vertical-alignment: center;
+            }
+
+            ComboBox {
+                width: 90px;
+                model: root.create-currencies;
+                current-value <=> root.create-currency;
+                selected(c) => {
+                    root.create-currency-changed(c);
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: "premium";
+                vertical-alignment: center;
+            }
+
+            LineEdit {
+                width: 80px;
+                text <=> root.create-premium;
+                placeholder-text: "+1%";
+                input-type: InputType.text;
+                edited => {
+                    root.create-premium-changed();
+                }
+            }
+        }
+
+        Muted {
+            text: root.create-preview;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: "amount";
+                vertical-alignment: center;
+            }
+
+            LineEdit {
+                width: 80px;
+                text <=> root.create-amount-min;
+                placeholder-text: "min";
+                input-type: InputType.decimal;
+                edited => {
+                    if root.create-amount-linked {
+                        root.create-amount-max = self.text;
+                    }
+                }
+            }
+
+            Text {
+                text: "to";
+                vertical-alignment: center;
+            }
+
+            LineEdit {
+                width: 80px;
+                text <=> root.create-amount-max;
+                placeholder-text: "max";
+                input-type: InputType.decimal;
+                edited => {
+                    root.create-amount-linked = self.text == root.create-amount-min;
+                }
+            }
+
+            Text {
+                text: root.create-currency;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: "bitcoin sent via";
+            font-weight: 700;
+        }
+
+        VerticalLayout {
+            for row[r] in Math.ceil(root.bitcoin-options.length / 3): HorizontalLayout {
+                spacing: 8px;
+                for col in 3: Rectangle {
+                    horizontal-stretch: 1;
+                    height: 32px;
+                    if r * 3 + col < root.bitcoin-options.length: CheckBox {
+                        x: 0;
+                        width: parent.width;
+                        text: root.bitcoin-options[r * 3 + col].name;
+                        checked: root.bitcoin-options[r * 3 + col].checked;
+                        toggled => {
+                            root.toggle-bitcoin(self.text, self.checked);
+                        }
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: "fiat payment methods";
+            font-weight: 700;
+        }
+
+        VerticalLayout {
+            // a simple two-column grid of checkboxes
+            for row[r] in Math.ceil(root.payment-options.length / 2): HorizontalLayout {
+                spacing: 8px;
+                for col in 2: Rectangle {
+                    horizontal-stretch: 1;
+                    height: 32px;
+                    if r * 2 + col < root.payment-options.length: CheckBox {
+                        x: 0;
+                        width: parent.width;
+                        text: root.payment-options[r * 2 + col].name;
+                        checked: root.payment-options[r * 2 + col].checked;
+                        toggled => {
+                            root.toggle-payment(self.text, self.checked);
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.payment-more.length > 0: Text {
+            text: root.create-more-payments ? "show less" : "show more (" + root.payment-more.length + ")";
+            color: #f7931a;
+            font-size: 13px;
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.create-more-payments = !root.create-more-payments;
+                }
+            }
+        }
+
+        if root.create-more-payments: VerticalLayout {
+            spacing: 0px;
+            for row[r] in Math.ceil(root.payment-more.length / 2): HorizontalLayout {
+                spacing: 8px;
+                for col in 2: Rectangle {
+                    horizontal-stretch: 1;
+                    height: 32px;
+                    if r * 2 + col < root.payment-more.length: CheckBox {
+                        x: 0;
+                        width: parent.width;
+                        text: root.payment-more[r * 2 + col].name;
+                        checked: root.payment-more[r * 2 + col].checked;
+                        toggled => {
+                            root.toggle-payment(self.text, self.checked);
+                        }
+                    }
+                }
+            }
+        }
+
+        LineEdit {
+            text <=> root.create-other-payments;
+            placeholder-text: "other payment methods, comma-separated";
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Switch {
+                checked <=> root.create-custom;
+            }
+
+            Text {
+                text: "custom price source, relays and description";
+                vertical-alignment: center;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+            }
+        }
+
+        if root.create-custom: VerticalLayout {
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "market price from";
+                    vertical-alignment: center;
+                }
+
+                ComboBox {
+                    model: root.create-apis;
+                    current-value <=> root.create-api;
+                    selected(a) => {
+                        root.create-api-changed(a);
+                    }
+                }
+            }
+
+            Text {
+                text: "relays where to publish this offer";
+                font-weight: 700;
+            }
+
+            LineEdit {
+                text <=> root.create-publish-relays;
+                placeholder-text: "wss://…, comma-separated";
+            }
+
+            Muted {
+                text: "the relays in your relay list (NIP-65) get it too, that's where the people who trust you look for your offers.";
+            }
+
+            Text {
+                text: "relays for the negotiation";
+                font-weight: 700;
+            }
+
+            LineEdit {
+                text <=> root.create-relays;
+                placeholder-text: "wss://…, comma-separated";
+            }
+
+            Text {
+                text: "description";
+                font-weight: 700;
+            }
+
+            TextEdit {
+                text <=> root.create-description;
+                min-height: 90px;
+                wrap: word-wrap;
+            }
+        }
+
+        Button {
+            text: "Publish offer";
+            primary: true;
+            clicked => {
+                root.publish-offer();
+            }
+        }
+    }
+}

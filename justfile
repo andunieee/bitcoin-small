@@ -1,3 +1,7 @@
+# build and run the desktop app
+desktop:
+    cargo run --bin bitcoin-smol
+
 # build a debug apk for arm64 and install it on the connected device, without launching it.
 # it's signed with release.jks (gitignored, password in release.jks.password), the same key as
 # the github releases, so either can be installed over the other.

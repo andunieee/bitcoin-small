@@ -1,0 +1,135 @@
+import { LineEdit, ScrollView, Switch } from "std-widgets.slint";
+import { RelayItem } from "../models.slint";
+import { Title, Muted, Button } from "../widgets.slint";
+
+export component SettingsPage inherits ScrollView {
+    in property <string> npub;
+    in property <string> nsec;
+    in property <[RelayItem]> relays;
+    in-out property <bool> show-reset-identity;
+    callback toggle-relay(string, bool);
+    callback remove-relay(string);
+    callback add-relay(string);
+    callback reveal-nsec();
+    callback open-profile(string);
+    callback import-nsec(string);
+
+    content-width: self.visible-width;
+
+    VerticalLayout {
+        width: root.visible-width;
+        padding: 16px;
+        spacing: 10px;
+        alignment: start;
+        Title {
+            text: "Your key";
+        }
+
+        LineEdit {
+            text: root.npub;
+            read-only: true;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Button {
+                text: "My history";
+                clicked => {
+                    root.open-profile(root.npub);
+                }
+            }
+
+            Button {
+                text: root.nsec == "" ? "Reveal nsec" : "Hide nsec";
+                clicked => {
+                    root.reveal-nsec();
+                }
+            }
+        }
+
+        if root.nsec != "": LineEdit {
+            text: root.nsec;
+            read-only: true;
+        }
+
+        Title {
+            text: "Relays";
+        }
+
+        for relay in root.relays: HorizontalLayout {
+            spacing: 8px;
+            Switch {
+                checked: relay.enabled;
+                toggled => {
+                    root.toggle-relay(relay.url, self.checked);
+                }
+            }
+
+            Text {
+                text: relay.url;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            Button {
+                text: "×";
+                clicked => {
+                    root.remove-relay(relay.url);
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            new-relay := LineEdit {
+                placeholder-text: "wss://…";
+            }
+
+            Button {
+                text: "Add";
+                clicked => {
+                    root.add-relay(new-relay.text);
+                    new-relay.text = "";
+                }
+            }
+        }
+
+        // out of the way, as it replaces who we are
+        Text {
+            text: (root.show-reset-identity ? "▾" : "▸") + " Reset identity";
+            color: #c62828;
+            font-weight: 700;
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.show-reset-identity = !root.show-reset-identity;
+                }
+            }
+        }
+
+        if root.show-reset-identity: VerticalLayout {
+            spacing: 8px;
+            Muted {
+                text: "Switch to another key you used before. This one stops being yours here: its trade reports stay with it. Save its nsec first if you may want it back. Only possible with no open offers or ongoing trades.";
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                import-field := LineEdit {
+                    placeholder-text: "nsec1…";
+                    input-type: password;
+                }
+
+                Button {
+                    text: "Import";
+                    enabled: import-field.text != "";
+                    clicked => {
+                        root.import-nsec(import-field.text);
+                        import-field.text = "";
+                    }
+                }
+            }
+        }
+    }
+}

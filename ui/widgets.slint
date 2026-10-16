@@ -1,0 +1,142 @@
+import { Palette } from "std-widgets.slint";
+
+export component Card inherits Rectangle {
+    background: Palette.alternate-background;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Palette.border;
+}
+
+export component Title inherits Text {
+    font-size: 20px;
+    font-weight: 700;
+    wrap: word-wrap;
+}
+
+export component Muted inherits Text {
+    color: Palette.foreground.transparentize(40%);
+    font-size: 12px;
+    wrap: word-wrap;
+}
+
+export component Tip inherits Rectangle {
+    in property <string> text;
+    background: #f7931a22;
+    border-radius: 6px;
+    VerticalLayout {
+        padding: 8px;
+        Text {
+            text: root.text;
+            wrap: word-wrap;
+            font-size: 12px;
+        }
+    }
+}
+
+export component NavButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked;
+    height: 52px;
+    background: area.pressed ? Palette.selection-background.transparentize(60%) : transparent;
+    area := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Text {
+        text: root.text;
+        color: root.active ? #f7931a : Palette.foreground;
+        font-weight: root.active ? 700 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component SideBadge inherits Rectangle {
+    in property <string> side;
+    width: 48px;
+    height: 22px;
+    border-radius: 4px;
+    background: side == "sell" ? #2e7d32 : #1565c0;
+    Text {
+        // from the taker's point of view: a maker who sells is someone you can buy from
+        text: root.side == "sell" ? "SELLS" : "BUYS";
+        color: white;
+        font-size: 11px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// someone, by our label for them or by their short key, in a color that comes from their key
+export component Identity inherits Text {
+    in property <color> tint;
+    font-weight: 700;
+    // the tint is dark enough to read on light backgrounds
+    color: Palette.color-scheme == ColorScheme.dark ? root.tint.mix(white, 0.6) : root.tint;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+// the std button can't show a pointer cursor, its own touch area always sets the default one
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary;
+    in property <bool> enabled: true;
+    in property <bool> small;
+    callback clicked;
+    min-height: root.small ? 26px : 32px;
+    max-height: root.small ? 26px : 32px;
+    min-width: 32px;
+    preferred-width: t.preferred-width + (root.small ? 16px : 24px);
+    horizontal-stretch: 0;
+    border-radius: 4px;
+    border-width: root.primary ? 0 : 1px;
+    border-color: Palette.border.transparentize(40%);
+    opacity: root.enabled ? 1 : 0.5;
+    background: (root.primary ? Palette.accent-background : Palette.control-background)
+        .darker(area.pressed ? 0.15 : area.has-hover ? 0.07 : 0);
+    area := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    t := Text {
+        text: root.text;
+        color: root.primary ? Palette.accent-foreground : Palette.control-foreground;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component Choices inherits Card {
+    in property <string> title;
+    in property <[string]> options;
+    callback picked(string);
+    VerticalLayout {
+        padding-top: 8px;
+        padding-bottom: 8px;
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 4px;
+        Text {
+            text: root.title;
+            font-weight: 700;
+            wrap: word-wrap;
+        }
+
+        for option in root.options: Button {
+            text: option;
+            clicked => {
+                root.picked(option);
+            }
+        }
+    }
+}

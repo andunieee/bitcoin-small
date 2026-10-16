@@ -1,0 +1,85 @@
+import { ScrollView } from "std-widgets.slint";
+import { OfferItem, TradeItem } from "../models.slint";
+import { Card, Title, Muted, SideBadge, Button } from "../widgets.slint";
+import { TradeCard } from "../trade_widgets.slint";
+
+export component TradesPage inherits ScrollView {
+    in property <[OfferItem]> my-offers;
+    in property <[TradeItem]> ongoing-trades;
+    in property <[TradeItem]> past-trades;
+    callback close-offer(string);
+    callback open-trade(string);
+    callback open-past-trade(string);
+
+    content-width: self.visible-width;
+
+    VerticalLayout {
+        width: root.visible-width;
+        padding: 16px;
+        spacing: 10px;
+        alignment: start;
+        Title {
+            text: "Your open offers";
+        }
+
+        if root.my-offers.length == 0: Muted {
+            text: "none.";
+        }
+        for offer in root.my-offers: Card {
+            HorizontalLayout {
+                padding: 10px;
+                spacing: 8px;
+                SideBadge {
+                    side: offer.side;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text {
+                        text: offer.currency + " " + offer.premium + " · " + offer.price;
+                        font-weight: 700;
+                        overflow: elide;
+                    }
+
+                    Muted {
+                        text: offer.amount + " · " + offer.payments + " · posted " + offer.age;
+                    }
+                }
+
+                Button {
+                    text: "Close";
+                    clicked => {
+                        root.close-offer(offer.id);
+                    }
+                }
+            }
+        }
+
+        Title {
+            text: "Ongoing";
+        }
+
+        if root.ongoing-trades.length == 0: Muted {
+            text: "no ongoing trades. contact a maker in the market, or wait for takers of your offers.";
+        }
+        for t in root.ongoing-trades: TradeCard {
+            item: t;
+            clicked => {
+                root.open-trade(t.key);
+            }
+        }
+
+        if root.past-trades.length > 0: Title {
+            text: "History";
+        }
+        for t in root.past-trades: TradeCard {
+            item: t;
+            opacity: 0.75;
+            clicked => {
+                root.open-past-trade(t.key);
+            }
+        }
+    }
+}

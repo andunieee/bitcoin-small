@@ -1,0 +1,142 @@
+import { ScrollView, Palette } from "std-widgets.slint";
+import { OfferItem } from "../models.slint";
+import { Card, Title, Muted, SideBadge, Identity, Button } from "../widgets.slint";
+
+export component OfferPage inherits ScrollView {
+    in property <OfferItem> current-offer;
+    callback open-profile(string);
+    callback contact-maker(string);
+    callback close-offer(string);
+    callback back();
+
+    content-width: self.visible-width;
+
+    VerticalLayout {
+        width: root.visible-width;
+        padding: 16px;
+        spacing: 10px;
+        alignment: start;
+        HorizontalLayout {
+            spacing: 8px;
+            SideBadge {
+                side: root.current-offer.side;
+            }
+
+            Title {
+                text: "bitcoin for " + root.current-offer.currency;
+            }
+        }
+
+        Card {
+            VerticalLayout {
+                padding: 12px;
+                spacing: 6px;
+                Text {
+                    text: "price: market " + root.current-offer.premium + " (" + root.current-offer.price-api + ")";
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.current-offer.price;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "amount: " + root.current-offer.amount;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: "payment: " + root.current-offer.payments;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: "bitcoin via: " + root.current-offer.bitcoin;
+                    wrap: word-wrap;
+                }
+
+                Muted {
+                    text: "negotiation relays: " + root.current-offer.relays;
+                }
+
+                Muted {
+                    text: "posted " + root.current-offer.age;
+                }
+            }
+        }
+
+        if root.current-offer.description != "": Card {
+            VerticalLayout {
+                padding: 12px;
+                Text {
+                    text: root.current-offer.description;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        if !root.current-offer.mine: HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            Text {
+                text: "maker:";
+                vertical-alignment: center;
+            }
+
+            Identity {
+                text: root.current-offer.maker-name;
+                tint: root.current-offer.maker-color;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.open-profile(root.current-offer.maker);
+                    }
+                }
+            }
+        }
+
+        Button {
+            text: "Maker's trade history";
+            clicked => {
+                root.open-profile(root.current-offer.maker);
+            }
+        }
+
+        // from the taker's point of view, like the badge
+        if !root.current-offer.mine: Rectangle {
+            height: 40px;
+            border-radius: 4px;
+            border-width: 2px;
+            border-color: #f7931a;
+            background: Palette.control-background.darker(take.pressed ? 0.15 : take.has-hover ? 0.07 : 0);
+            take := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.contact-maker(root.current-offer.id);
+                }
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: 5px;
+                Text {
+                    text: root.current-offer.side == "sell" ? "Buy Bitcoin from" : "Sell Bitcoin to";
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                Identity {
+                    text: root.current-offer.maker-name;
+                    tint: root.current-offer.maker-color;
+                }
+            }
+        }
+        if root.current-offer.mine: Button {
+            text: "Close offer";
+            clicked => {
+                root.close-offer(root.current-offer.id);
+                root.back();
+            }
+        }
+    }
+}

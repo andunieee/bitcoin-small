@@ -1,0 +1,252 @@
+import { LineEdit, TextEdit } from "std-widgets.slint";
+import { DealView } from "models.slint";
+import { Card, Muted, Tip, Button, Choices } from "widgets.slint";
+
+// where a trade stands and the forms that move it forward. picking something sends a message.
+export component DealPanel inherits VerticalLayout {
+    in property <DealView> deal;
+    // "details" while asking to confirm them
+    in-out property <string> confirming;
+    in-out property <string> draft;
+    callback pick-amount(string);
+    callback quote-price(string);
+    callback pick-bitcoin(string);
+    callback pick-payment(string);
+    callback give-details(string);
+    callback mark-sent();
+    // why the details can't be sent, empty when they can
+    pure callback check-details(string) -> string;
+    property <string> details-error: root.check-details(root.draft);
+    spacing: 6px;
+    alignment: start;
+
+    if root.deal.price-warning != "": Rectangle {
+        background: #c6282833;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #c62828;
+        VerticalLayout {
+            padding-top: 6px;
+            padding-bottom: 6px;
+            padding-left: 12px;
+            padding-right: 12px;
+            Text {
+                text: "⚠ " + root.deal.price-warning;
+                wrap: word-wrap;
+                font-size: 13px;
+                font-weight: 700;
+            }
+        }
+    }
+
+    if root.deal.rows.length > 0: Card {
+        VerticalLayout {
+            padding-top: 8px;
+            padding-bottom: 8px;
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 4px;
+            for row in root.deal.rows: HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    Muted {
+                        text: row.label;
+                    }
+
+                    Text {
+                        text: row.value;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if row.label2 != "": VerticalLayout {
+                    horizontal-stretch: 1;
+                    Muted {
+                        text: row.label2;
+                    }
+
+                    Text {
+                        text: row.value2;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+
+    if root.deal.pick-amount: Card {
+        VerticalLayout {
+            padding-top: 8px;
+            padding-bottom: 8px;
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 4px;
+            Text {
+                text: "next step: How much?";
+                font-weight: 700;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                amount := LineEdit {
+                    placeholder-text: root.deal.amount-hint;
+                    input-type: InputType.decimal;
+                    accepted => {
+                        root.pick-amount(self.text);
+                    }
+                }
+
+                Button {
+                    text: "Pick";
+                    enabled: amount.text != "";
+                    clicked => {
+                        root.pick-amount(amount.text);
+                    }
+                }
+            }
+
+            if root.deal.sats-per-unit > 0 && amount.text.is-float(): Muted {
+                text: "≈ " + Math.round(amount.text.to-float() * root.deal.sats-per-unit) + " sats at the current price";
+            }
+        }
+    }
+    if root.deal.quote-price: Card {
+        VerticalLayout {
+            padding-top: 8px;
+            padding-bottom: 8px;
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 4px;
+            Text {
+                text: "next step: Your price";
+                font-weight: 700;
+            }
+
+            Muted {
+                text: root.deal.quote-hint;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                quote := LineEdit {
+                    placeholder-text: "price of 1 BTC";
+                    input-type: InputType.decimal;
+                    accepted => {
+                        root.quote-price(self.text);
+                    }
+                }
+
+                Button {
+                    text: "Send";
+                    enabled: quote.text != "";
+                    clicked => {
+                        root.quote-price(quote.text);
+                    }
+                }
+            }
+        }
+    }
+    if root.deal.bitcoin-choices.length > 0: Choices {
+        title: "next step: How is the bitcoin sent?";
+        options: root.deal.bitcoin-choices;
+        picked(m) => {
+            root.pick-bitcoin(m);
+        }
+    }
+    if root.deal.payment-choices.length > 0: Choices {
+        title: "next step: How is the fiat sent?";
+        options: root.deal.payment-choices;
+        picked(m) => {
+            root.pick-payment(m);
+        }
+    }
+    if root.deal.give-details: Card {
+        VerticalLayout {
+            padding-top: 8px;
+            padding-bottom: 8px;
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 4px;
+            Text {
+                text: "next step: " + root.deal.details-label;
+                font-weight: 700;
+                wrap: word-wrap;
+            }
+
+            Muted {
+                text: root.deal.details-hint;
+            }
+
+            TextEdit {
+                text <=> root.draft;
+                min-height: 80px;
+                wrap: word-wrap;
+                read-only: root.confirming == "details";
+            }
+
+            if root.details-error != "": Text {
+                text: root.details-error;
+                color: #c62828;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            if root.confirming != "details": Button {
+                text: "Send…";
+                enabled: root.draft != "" && root.details-error == "";
+                clicked => {
+                    root.confirming = "details";
+                }
+            }
+            if root.confirming == "details": Tip {
+                text: "Check every character. If these details are wrong, what they send can go to someone else and be lost for good.";
+            }
+            if root.confirming == "details": HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "Confirm and send";
+                    primary: true;
+                    enabled: root.details-error == "";
+                    clicked => {
+                        root.give-details(root.draft);
+                    }
+                }
+
+                Button {
+                    text: "Edit";
+                    clicked => {
+                        root.confirming = "";
+                    }
+                }
+            }
+        }
+    }
+    if root.deal.can-send: Card {
+        VerticalLayout {
+            padding-top: 8px;
+            padding-bottom: 8px;
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 4px;
+            Text {
+                text: "next step:";
+                font-weight: 700;
+            }
+
+            Text {
+                text: root.deal.send-hint;
+                wrap: word-wrap;
+            }
+
+            Button {
+                text: root.deal.send-label;
+                primary: true;
+                clicked => {
+                    root.mark-sent();
+                }
+            }
+        }
+    }
+}

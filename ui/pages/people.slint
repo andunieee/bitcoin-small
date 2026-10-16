@@ -1,0 +1,59 @@
+import { LineEdit, ListView } from "std-widgets.slint";
+import { PersonItem } from "../models.slint";
+import { Card, Title, Muted, Identity } from "../widgets.slint";
+
+export component PeoplePage inherits VerticalLayout {
+    in property <[PersonItem]> people;
+    in-out property <string> people-filter;
+    callback people-filter-changed(string);
+    callback open-profile(string);
+
+    padding: 16px;
+    spacing: 8px;
+    Title {
+        text: "People";
+    }
+
+    LineEdit {
+        text <=> root.people-filter;
+        placeholder-text: "search labels or npubs";
+        edited(t) => {
+            root.people-filter-changed(t);
+        }
+    }
+
+    if root.people.length == 0: Muted {
+        text: root.people-filter == "" ? "nobody labeled yet." : "nobody matches.";
+    }
+    ListView {
+        vertical-stretch: 1;
+        for person in root.people: VerticalLayout {
+            padding-bottom: 8px;
+            padding-right: 6px;
+            Card {
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.open-profile(person.npub);
+                    }
+                }
+
+                HorizontalLayout {
+                    padding: 10px;
+                    spacing: 8px;
+                    Identity {
+                        text: person.label;
+                        tint: person.color;
+                    }
+
+                    Muted {
+                        text: person.short;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+    }
+}

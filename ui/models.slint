@@ -1,0 +1,130 @@
+export struct OfferItem {
+    id: string,
+    maker: string,
+    // our label for them, or their short key
+    maker-name: string,
+    maker-color: color,
+    mine: bool,
+    side: string,
+    currency: string,
+    price-api: string,
+    premium: string,
+    price: string,
+    // "20–100 USD", or "50 USD" when min and max are the same
+    amount: string,
+    payments: string,
+    bitcoin: string,
+    relays: string,
+    description: string,
+    age: string,
+}
+
+export struct TradeItem {
+    // the peer's npub for an ongoing trade, the history id for a past one
+    key: string,
+    peer-name: string,
+    peer-color: color,
+    summary: string,
+    status: string,
+    last: string,
+    blocked: bool,
+}
+
+export struct TradeView {
+    ongoing: bool,
+    peer: string,
+    peer-name: string,
+    peer-color: color,
+    blocked: bool,
+    summary: string,
+}
+
+ // one row of what has been agreed, with a second column when label2 isn't empty
+export struct DealRow {
+    label: string,
+    value: string,
+    label2: string,
+    value2: string,
+}
+
+// the structured state of a trade that came from an offer, and which of its forms are ours to fill
+export struct DealView {
+    // false for chats that aren't about an offer
+    active: bool,
+    // for the taker, when the maker's price is too far from the offer's price source
+    price-warning: string,
+    rows: [DealRow],
+    pick-amount: bool,
+    amount-hint: string,
+    // to show the amount being typed in sats, zero while the price is unknown
+    sats-per-unit: float,
+    // for the maker, when the market price can't be fetched to quote it
+    quote-price: bool,
+    quote-hint: string,
+    // non-empty when we have to pick one
+    bitcoin-choices: [string],
+    payment-choices: [string],
+    give-details: bool,
+    details-label: string,
+    details-hint: string,
+    can-send: bool,
+    send-hint: string,
+    send-label: string,
+}
+
+export struct MsgItem {
+    id: string,
+    mine: bool,
+    text: string,
+    // a structured message, shown by what it sets
+    meta: bool,
+    // a structured one that set nothing, as it made no sense when it arrived
+    ignored: bool,
+    time: string,
+}
+
+export struct ReportItem {
+    author-name: string,
+    author-color: color,
+    // who it is about, for our own reports on our profile. empty otherwise.
+    subject-name: string,
+    subject-color: color,
+    success: bool,
+    comment: string,
+    time: string,
+}
+
+export struct PersonItem {
+    npub: string,
+    short: string,
+    label: string,
+    color: color,
+}
+
+export struct RelayItem {
+    url: string,
+    enabled: bool,
+}
+
+/// what one relay answered to something we sent. state is "sending", "ok" or "failed"
+export struct RelayAnswer {
+    url: string,
+    host: string,
+    state: string,
+    error: string,
+}
+
+/// one thing we sent and how each relay took it
+export struct SentItem {
+    title: string,
+    // said instead of the answers when there are none
+    note: string,
+    // the event itself, indented
+    json: string,
+    answers: [RelayAnswer],
+}
+
+export struct PayItem {
+    name: string,
+    checked: bool,
+}

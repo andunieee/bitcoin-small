@@ -1,0 +1,319 @@
+import {
+    LineEdit,
+    TextEdit,
+    ScrollView,
+    ListView,
+    Palette,
+} from "std-widgets.slint";
+import { TradeView, MsgItem, DealView } from "../models.slint";
+import { Card, Muted, Identity, Button } from "../widgets.slint";
+import { DealPanel } from "../deal.slint";
+import { TradeActions } from "../trade_widgets.slint";
+
+export component TradePage inherits VerticalLayout {
+    in property <TradeView> trade;
+    in property <[MsgItem]> messages;
+    in property <DealView> deal;
+    in-out property <string> trade-confirming;
+    in-out property <string> trade-details-draft;
+    in-out property <bool> trade-concluding;
+    in-out property <bool> trade-confirm-delete;
+    in property <bool> trade-wide;
+    callback open-profile(string);
+    callback archive-trade();
+    callback conclude-trade(bool, string);
+    callback send-message(string);
+    callback trade-pick-amount(string);
+    callback trade-quote-price(string);
+    callback trade-pick-bitcoin(string);
+    callback trade-pick-payment(string);
+    callback trade-give-details(string);
+    pure callback trade-check-details(string) -> string;
+    callback trade-mark-sent();
+    callback delete-trade();
+    callback open-message-report(string);
+
+    padding: 16px;
+    spacing: 8px;
+
+    // the offer, who it is with, and what can be done with the whole trade
+    Card {
+        VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+                    alignment: center;
+                    Text {
+                        text: root.trade.summary;
+                        font-weight: 700;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                    }
+
+                    Identity {
+                        text: root.trade.peer-name + (root.trade.blocked ? " (blocked)" : "");
+                        tint: root.trade.peer-color;
+                        font-size: 13px;
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.open-profile(root.trade.peer);
+                            }
+                        }
+                    }
+                }
+
+                if root.trade.ongoing && !root.trade-concluding: TradeActions {
+                    conclude => {
+                        root.trade-concluding = true;
+                    }
+                    archive => {
+                        root.archive-trade();
+                    }
+                }
+            }
+
+            if root.trade-concluding: VerticalLayout {
+                spacing: 8px;
+                Text {
+                    text: "How did it go?";
+                    font-weight: 700;
+                }
+
+                conclusion := LineEdit {
+                    placeholder-text: "optional comment, e.g. \"$5 via PIX, fast\"";
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button {
+                        text: "✓ Success";
+                        clicked => {
+                            root.conclude-trade(true, conclusion.text);
+                        }
+                    }
+
+                    Button {
+                        text: "✗ Failure";
+                        clicked => {
+                            root.conclude-trade(false, conclusion.text);
+                        }
+                    }
+
+                    Button {
+                        text: "Cancel";
+                        clicked => {
+                            root.trade-concluding = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // on wide screens the deal sits next to the chat, otherwise above it
+    if root.deal.active && !root.trade-wide: sv-deal-top := ScrollView {
+        height: min(dp-top.preferred-height, root.height * 0.45);
+        // long unbreakable values, like an invoice, would widen it and push the panel sideways
+        content-width: self.visible-width;
+        VerticalLayout {
+            width: sv-deal-top.visible-width;
+            padding-right: 6px;
+            dp-top := DealPanel {
+                deal: root.deal;
+                confirming <=> root.trade-confirming;
+                draft <=> root.trade-details-draft;
+                pick-amount(a) => {
+                    root.trade-pick-amount(a);
+                }
+                quote-price(p) => {
+                    root.trade-quote-price(p);
+                }
+                pick-bitcoin(m) => {
+                    root.trade-pick-bitcoin(m);
+                }
+                pick-payment(m) => {
+                    root.trade-pick-payment(m);
+                }
+                give-details(d) => {
+                    root.trade-give-details(d);
+                }
+                check-details(d) => {
+                    return root.trade-check-details(d);
+                }
+                mark-sent => {
+                    root.trade-mark-sent();
+                }
+            }
+        }
+    }
+    HorizontalLayout {
+        vertical-stretch: 1;
+        spacing: 12px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 8px;
+            ListView {
+                vertical-stretch: 1;
+                padding-right: 6px;
+                for msg in root.messages: HorizontalLayout {
+                    padding-bottom: 6px;
+                    padding-right: 6px;
+                    alignment: msg.mine ? end : start;
+                    if !msg.meta: Rectangle {
+                        width: min(300px, plain-text.preferred-width + 24px);
+                        height: plain-layout.preferred-height;
+                        border-radius: 10px;
+                        background: msg.mine ? #f7931a33 : Palette.alternate-background;
+                        plain-layout := VerticalLayout {
+                            padding-top: 8px;
+                            padding-bottom: 8px;
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            plain-text := Text {
+                                text: msg.text;
+                                wrap: word-wrap;
+                            }
+
+                            Muted {
+                                text: msg.time;
+                                horizontal-alignment: right;
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.open-message-report(msg.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // a structured message: an update to the deal, not something said
+                    if msg.meta: Rectangle {
+                        width: min(300px, meta-text.preferred-width + 24px);
+                        height: meta-layout.preferred-height;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: #1565c0;
+                        background: #1565c022;
+                        opacity: msg.ignored ? 0.5 : 1;
+                        meta-layout := VerticalLayout {
+                            padding-top: 8px;
+                            padding-bottom: 8px;
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 2px;
+                            meta-text := Text {
+                                text: msg.text;
+                                font-size: 13px;
+                                font-weight: 700;
+                                wrap: word-wrap;
+                            }
+
+                            Muted {
+                                text: (msg.ignored ? "ignored, it didn't fit the deal · " : "") + msg.time;
+                                horizontal-alignment: right;
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.open-message-report(msg.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.trade.ongoing && !root.trade.blocked: HorizontalLayout {
+                spacing: 8px;
+                // enter sends, shift+enter goes to a new line
+                FocusScope {
+                    horizontal-stretch: 1;
+                    height: 64px;
+                    capture-key-pressed(event) => {
+                        if event.text == Key.Return && !event.modifiers.shift {
+                            root.send-message(input.text);
+                            input.text = "";
+                            return accept;
+                        }
+                        return reject;
+                    }
+                    input := TextEdit {
+                        width: parent.width;
+                        height: parent.height;
+                        placeholder-text: "message";
+                        wrap: word-wrap;
+                    }
+                }
+
+                Button {
+                    text: "Send";
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        root.send-message(input.text);
+                        input.text = "";
+                    }
+                }
+            }
+            if !root.trade.ongoing: HorizontalLayout {
+                spacing: 8px;
+                Muted {
+                    text: "this trade is over. messages are kept here as they were.";
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    text: root.trade-confirm-delete ? "Really delete?" : "Delete";
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        if root.trade-confirm-delete {
+                            root.delete-trade();
+                        } else {
+                            root.trade-confirm-delete = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.deal.active && root.trade-wide: sv-deal := ScrollView {
+            width: 340px;
+            content-width: self.visible-width;
+            VerticalLayout {
+                width: sv-deal.visible-width;
+                padding-right: 6px;
+                DealPanel {
+                    deal: root.deal;
+                    confirming <=> root.trade-confirming;
+                    draft <=> root.trade-details-draft;
+                    pick-amount(a) => {
+                        root.trade-pick-amount(a);
+                    }
+                    quote-price(p) => {
+                        root.trade-quote-price(p);
+                    }
+                    pick-bitcoin(m) => {
+                        root.trade-pick-bitcoin(m);
+                    }
+                    pick-payment(m) => {
+                        root.trade-pick-payment(m);
+                    }
+                    give-details(d) => {
+                        root.trade-give-details(d);
+                    }
+                    check-details(d) => {
+                        return root.trade-check-details(d);
+                    }
+                    mark-sent => {
+                        root.trade-mark-sent();
+                    }
+                }
+            }
+        }
+    }
+}

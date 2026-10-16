@@ -1,0 +1,136 @@
+import { ComboBox, ListView } from "std-widgets.slint";
+import { OfferItem } from "../models.slint";
+import { Card, Muted, Tip, SideBadge, Identity, Button } from "../widgets.slint";
+
+export component MarketPage inherits VerticalLayout {
+    in property <[OfferItem]> offers;
+    in property <[string]> currencies;
+    in-out property <string> filter-side;
+    in-out property <string> filter-currency;
+    in property <bool> loading;
+    in property <bool> newcomer;
+    callback refresh-offers();
+    callback filters-changed();
+    callback open-offer(string);
+    callback open-docs();
+
+    padding: 16px;
+    spacing: 8px;
+
+    if root.newcomer: Tip {
+        text: "New here? Read how this works and how to trade safely →";
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.open-docs();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        ComboBox {
+            model: ["all", "sell", "buy"];
+            current-value <=> root.filter-side;
+            selected => {
+                root.filters-changed();
+            }
+        }
+
+        ComboBox {
+            model: root.currencies;
+            current-value <=> root.filter-currency;
+            selected => {
+                root.filters-changed();
+            }
+        }
+
+        Button {
+            text: root.loading ? "…" : "Refresh";
+            enabled: !root.loading;
+            clicked => {
+                root.refresh-offers();
+            }
+        }
+    }
+
+    if root.offers.length == 0: Muted {
+        text: root.loading ? "loading offers from the last 3 hours…" : "no offers in the last 3 hours. create one!";
+        horizontal-alignment: center;
+    }
+    ListView {
+        vertical-stretch: 1;
+        for offer in root.offers: VerticalLayout {
+            padding-bottom: 8px;
+            padding-right: 6px;
+            Card {
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.open-offer(offer.id);
+                    }
+                }
+
+                VerticalLayout {
+                    padding: 10px;
+                    spacing: 4px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        SideBadge {
+                            side: offer.side;
+                        }
+
+                        Text {
+                            text: offer.currency + " " + offer.premium;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: offer.price;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+
+                    Text {
+                        text: offer.amount;
+                        font-size: 13px;
+                    }
+
+                    Text {
+                        text: offer.payments;
+                        wrap: word-wrap;
+                        font-size: 13px;
+                    }
+
+                    if offer.description != "": Text {
+                        text: offer.description;
+                        wrap: word-wrap;
+                        overflow: elide;
+                        max-height: 40px;
+                        font-size: 13px;
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        if offer.mine: Muted {
+                            text: "you";
+                            vertical-alignment: center;
+                        }
+                        if !offer.mine: Identity {
+                            text: offer.maker-name;
+                            tint: offer.maker-color;
+                            font-size: 12px;
+                        }
+                        Muted {
+                            text: "· " + offer.age;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

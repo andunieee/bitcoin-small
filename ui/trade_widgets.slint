@@ -1,0 +1,139 @@
+import { TextEdit, Palette } from "std-widgets.slint";
+import { TradeItem, SentItem } from "models.slint";
+import { Card, Muted, Identity, Button } from "widgets.slint";
+
+// what can be done with an ongoing trade, from the header of its page. a trade can only be
+// deleted once it is over.
+export component TradeActions inherits HorizontalLayout {
+    callback conclude();
+    callback archive();
+    spacing: 6px;
+    alignment: end;
+    Button {
+        text: "Conclude";
+        small: true;
+        y: (parent.height - self.height) / 2;
+        clicked => {
+            root.conclude();
+        }
+    }
+
+    Button {
+        text: "Archive";
+        small: true;
+        y: (parent.height - self.height) / 2;
+        clicked => {
+            root.archive();
+        }
+    }
+}
+
+// one thing in the relay report popup: each relay's answer, and the raw event behind a toggle
+export component SentReport inherits VerticalLayout {
+    in property <SentItem> item;
+    property <bool> show-json;
+    callback open-relay-site(string);
+    spacing: 4px;
+
+    Text {
+        text: root.item.title;
+        font-weight: 700;
+        wrap: word-wrap;
+    }
+
+    if root.item.note != "": Muted {
+        text: root.item.note;
+    }
+
+    for answer in root.item.answers: HorizontalLayout {
+        spacing: 8px;
+        Text {
+            width: 16px;
+            text: answer.state == "ok" ? "✓" : answer.state == "failed" ? "✗" : "…";
+            color: answer.state == "ok" ? #2e9e44 : answer.state == "failed" ? #d33 : Palette.foreground;
+            font-weight: 700;
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            Text {
+                text: answer.host;
+                color: #f7931a;
+                overflow: elide;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.open-relay-site(answer.host);
+                    }
+                }
+            }
+
+            if answer.error != "": Muted {
+                text: answer.error;
+            }
+        }
+    }
+
+    if root.item.json != "": Text {
+        text: root.show-json ? "hide raw event" : "show raw event";
+        color: #f7931a;
+        font-size: 12px;
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.show-json = !root.show-json;
+            }
+        }
+    }
+
+    if root.show-json: TextEdit {
+        text: root.item.json;
+        read-only: true;
+        wrap: char-wrap;
+        font-size: 11px;
+        height: 220px;
+    }
+}
+
+export component TradeCard inherits Rectangle {
+    in property <TradeItem> item;
+    callback clicked;
+    background: Palette.alternate-background;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Palette.border;
+    opacity: root.item.blocked ? 0.5 : 1;
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 2px;
+        Identity {
+            text: root.item.peer-name + (root.item.blocked ? " (blocked)" : "");
+            tint: root.item.peer-color;
+        }
+
+        Text {
+            text: root.item.status;
+            color: #f7931a;
+            font-size: 12px;
+            font-weight: 700;
+            wrap: word-wrap;
+        }
+
+        Muted {
+            text: root.item.summary;
+        }
+
+        if root.item.last != "": Text {
+            text: root.item.last;
+            overflow: elide;
+            font-size: 13px;
+        }
+    }
+}

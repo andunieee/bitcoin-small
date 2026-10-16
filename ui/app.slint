@@ -1,666 +1,17 @@
-import { LineEdit, TextEdit, ComboBox, CheckBox, ScrollView, ListView, Switch, Palette } from "std-widgets.slint";
+import { ScrollView, Palette } from "std-widgets.slint";
+import { OfferItem, TradeItem, TradeView, DealView, MsgItem, ReportItem, PersonItem, RelayItem, SentItem, PayItem } from "models.slint";
+import { Card, Title, Button, NavButton } from "widgets.slint";
+import { SentReport } from "trade_widgets.slint";
+import { MarketPage } from "pages/market.slint";
+import { OfferPage } from "pages/offer.slint";
+import { CreatePage } from "pages/create.slint";
+import { TradesPage } from "pages/trades.slint";
+import { TradePage } from "pages/trade.slint";
+import { ProfilePage } from "pages/profile.slint";
+import { PeoplePage } from "pages/people.slint";
+import { SettingsPage } from "pages/settings.slint";
 
-export struct OfferItem {
-    id: string,
-    maker: string,
-    // our label for them, or their short key
-    maker-name: string,
-    maker-color: color,
-    mine: bool,
-    side: string,
-    currency: string,
-    price-api: string,
-    premium: string,
-    price: string,
-    // "20–100 USD", or "50 USD" when min and max are the same
-    amount: string,
-    payments: string,
-    bitcoin: string,
-    relays: string,
-    description: string,
-    age: string,
-}
-
-export struct TradeItem {
-    // the peer's npub for an ongoing trade, the history id for a past one
-    key: string,
-    peer-name: string,
-    peer-color: color,
-    summary: string,
-    status: string,
-    last: string,
-    blocked: bool,
-}
-
-export struct TradeView {
-    ongoing: bool,
-    peer: string,
-    peer-name: string,
-    peer-color: color,
-    blocked: bool,
-    summary: string,
-}
-
-// one row of what has been agreed, with a second column when label2 isn't empty
-export struct DealRow {
-    label: string,
-    value: string,
-    label2: string,
-    value2: string,
-}
-
-// the structured state of a trade that came from an offer, and which of its forms are ours to fill
-export struct DealView {
-    // false for chats that aren't about an offer
-    active: bool,
-    role: string,
-    next-step: string,
-    my-turn: bool,
-    concluded: bool,
-    // for the taker, when the maker's price is too far from the offer's price source
-    price-warning: string,
-    rows: [DealRow],
-    pick-amount: bool,
-    amount-hint: string,
-    // to show the amount being typed in sats, zero while the price is unknown
-    sats-per-unit: float,
-    // for the maker, when the market price can't be fetched to quote it
-    quote-price: bool,
-    quote-hint: string,
-    // non-empty when we have to pick one
-    bitcoin-choices: [string],
-    payment-choices: [string],
-    give-details: bool,
-    details-label: string,
-    details-hint: string,
-    can-send: bool,
-    send-hint: string,
-    send-label: string,
-}
-
-export struct MsgItem {
-    id: string,
-    mine: bool,
-    text: string,
-    // a structured message, shown by what it sets
-    meta: bool,
-    // a structured one that set nothing, as it made no sense when it arrived
-    ignored: bool,
-    time: string,
-}
-
-export struct ReportItem {
-    author-name: string,
-    author-color: color,
-    // who it is about, for our own reports on our profile. empty otherwise.
-    subject-name: string,
-    subject-color: color,
-    success: bool,
-    comment: string,
-    time: string,
-}
-
-export struct PersonItem {
-    npub: string,
-    short: string,
-    label: string,
-    color: color,
-}
-
-export struct RelayItem {
-    url: string,
-    enabled: bool,
-}
-
-/// what one relay answered to something we sent. state is "sending", "ok" or "failed"
-export struct RelayAnswer {
-    url: string,
-    host: string,
-    state: string,
-    error: string,
-}
-
-/// one thing we sent and how each relay took it
-export struct SentItem {
-    title: string,
-    // said instead of the answers when there are none
-    note: string,
-    // the event itself, indented
-    json: string,
-    answers: [RelayAnswer],
-}
-
-export struct PayItem {
-    name: string,
-    checked: bool,
-}
-
-component Card inherits Rectangle {
-    background: Palette.alternate-background;
-    border-radius: 8px;
-    border-width: 1px;
-    border-color: Palette.border;
-}
-
-component Title inherits Text {
-    font-size: 20px;
-    font-weight: 700;
-    wrap: word-wrap;
-}
-
-component Muted inherits Text {
-    color: Palette.foreground.transparentize(40%);
-    font-size: 12px;
-    wrap: word-wrap;
-}
-
-component Tip inherits Rectangle {
-    in property <string> text;
-    background: #f7931a22;
-    border-radius: 6px;
-    VerticalLayout {
-        padding: 8px;
-        Text {
-            text: root.text;
-            wrap: word-wrap;
-            font-size: 12px;
-        }
-    }
-}
-
-component NavButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> active;
-    callback clicked;
-    height: 52px;
-    background: area.pressed ? Palette.selection-background.transparentize(60%) : transparent;
-    area := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-
-    Text {
-        text: root.text;
-        color: root.active ? #f7931a : Palette.foreground;
-        font-weight: root.active ? 700 : 400;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-
-component SideBadge inherits Rectangle {
-    in property <string> side;
-    width: 48px;
-    height: 22px;
-    border-radius: 4px;
-    background: side == "sell" ? #2e7d32 : #1565c0;
-    Text {
-        // from the taker's point of view: a maker who sells is someone you can buy from
-        text: root.side == "sell" ? "SELLS" : "BUYS";
-        color: white;
-        font-size: 11px;
-        font-weight: 700;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-
-// someone, by our label for them or by their short key, in a color that comes from their key
-component Identity inherits Text {
-    in property <color> tint;
-    font-weight: 700;
-    // the tint is dark enough to read on light backgrounds
-    color: Palette.color-scheme == ColorScheme.dark ? root.tint.mix(white, 0.6) : root.tint;
-    vertical-alignment: center;
-    overflow: elide;
-}
-
-// the std button can't show a pointer cursor, its own touch area always sets the default one
-component Button inherits Rectangle {
-    in property <string> text;
-    in property <bool> primary;
-    in property <bool> enabled: true;
-    callback clicked;
-    min-height: 32px;
-    max-height: 32px;
-    min-width: 32px;
-    preferred-width: t.preferred-width + 24px;
-    horizontal-stretch: 0;
-    border-radius: 4px;
-    border-width: root.primary ? 0 : 1px;
-    border-color: Palette.border.transparentize(40%);
-    opacity: root.enabled ? 1 : 0.5;
-    background: (root.primary ? Palette.accent-background : Palette.control-background)
-        .darker(area.pressed ? 0.15 : area.has-hover ? 0.07 : 0);
-    area := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-
-    t := Text {
-        text: root.text;
-        color: root.primary ? Palette.accent-foreground : Palette.control-foreground;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-
-component Choices inherits Card {
-    in property <string> title;
-    in property <[string]> options;
-    callback picked(string);
-    VerticalLayout {
-        padding: 10px;
-        spacing: 6px;
-        Text {
-            text: root.title;
-            font-weight: 700;
-            wrap: word-wrap;
-        }
-
-        for option in root.options: Button {
-            text: option;
-            clicked => {
-                root.picked(option);
-            }
-        }
-    }
-}
-
-// what comes next in a trade, and who we are in it
-component DealTurn inherits VerticalLayout {
-    in property <DealView> deal;
-    spacing: 8px;
-    Text {
-        text: root.deal.next-step;
-        color: root.deal.my-turn || root.deal.concluded ? #f7931a : Palette.foreground;
-        font-weight: 700;
-        wrap: word-wrap;
-    }
-
-    Muted {
-        text: root.deal.role;
-    }
-}
-
-// where a trade stands and the forms that move it forward. picking something sends a message.
-component DealPanel inherits VerticalLayout {
-    in property <DealView> deal;
-    // "details" while asking to confirm them
-    in-out property <string> confirming;
-    in-out property <string> draft;
-    callback pick-amount(string);
-    callback quote-price(string);
-    callback pick-bitcoin(string);
-    callback pick-payment(string);
-    callback give-details(string);
-    callback mark-sent();
-    // why the details can't be sent, empty when they can
-    pure callback check-details(string) -> string;
-    property <string> details-error: root.check-details(root.draft);
-    // on narrow screens whose turn it is goes under what has been agreed, next to the forms
-    in property <bool> compact;
-    spacing: 8px;
-    alignment: start;
-
-    if !root.compact: DealTurn {
-        deal: root.deal;
-    }
-
-    if root.deal.price-warning != "": Rectangle {
-        background: #c6282833;
-        border-radius: 6px;
-        border-width: 1px;
-        border-color: #c62828;
-        VerticalLayout {
-            padding: 8px;
-            Text {
-                text: "⚠ " + root.deal.price-warning;
-                wrap: word-wrap;
-                font-size: 13px;
-                font-weight: 700;
-            }
-        }
-    }
-
-    if root.deal.rows.length > 0: Card {
-        VerticalLayout {
-            padding: 10px;
-            spacing: 6px;
-            for row in root.deal.rows: HorizontalLayout {
-                spacing: 8px;
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    Muted {
-                        text: row.label;
-                    }
-
-                    Text {
-                        text: row.value;
-                        font-size: 13px;
-                        wrap: word-wrap;
-                    }
-                }
-
-                if row.label2 != "": VerticalLayout {
-                    horizontal-stretch: 1;
-                    Muted {
-                        text: row.label2;
-                    }
-
-                    Text {
-                        text: row.value2;
-                        font-size: 13px;
-                        wrap: word-wrap;
-                    }
-                }
-            }
-        }
-    }
-
-    if root.compact: DealTurn {
-        deal: root.deal;
-    }
-
-    if root.deal.pick-amount: Card {
-        VerticalLayout {
-            padding: 10px;
-            spacing: 6px;
-            Text {
-                text: "How much?";
-                font-weight: 700;
-            }
-
-            HorizontalLayout {
-                spacing: 8px;
-                amount := LineEdit {
-                    placeholder-text: root.deal.amount-hint;
-                    input-type: InputType.decimal;
-                    accepted => {
-                        root.pick-amount(self.text);
-                    }
-                }
-
-                Button {
-                    text: "Pick";
-                    enabled: amount.text != "";
-                    clicked => {
-                        root.pick-amount(amount.text);
-                    }
-                }
-            }
-
-            if root.deal.sats-per-unit > 0 && amount.text.is-float(): Muted {
-                text: "≈ " + Math.round(amount.text.to-float() * root.deal.sats-per-unit) + " sats at the current price";
-            }
-        }
-    }
-    if root.deal.quote-price: Card {
-        VerticalLayout {
-            padding: 10px;
-            spacing: 6px;
-            Text {
-                text: "Your price";
-                font-weight: 700;
-            }
-
-            Muted {
-                text: root.deal.quote-hint;
-            }
-
-            HorizontalLayout {
-                spacing: 8px;
-                quote := LineEdit {
-                    placeholder-text: "price of 1 BTC";
-                    input-type: InputType.decimal;
-                    accepted => {
-                        root.quote-price(self.text);
-                    }
-                }
-
-                Button {
-                    text: "Send";
-                    enabled: quote.text != "";
-                    clicked => {
-                        root.quote-price(quote.text);
-                    }
-                }
-            }
-        }
-    }
-    if root.deal.bitcoin-choices.length > 0: Choices {
-        title: "How is the bitcoin sent?";
-        options: root.deal.bitcoin-choices;
-        picked(m) => {
-            root.pick-bitcoin(m);
-        }
-    }
-    if root.deal.payment-choices.length > 0: Choices {
-        title: "How is the fiat sent?";
-        options: root.deal.payment-choices;
-        picked(m) => {
-            root.pick-payment(m);
-        }
-    }
-    if root.deal.give-details: Card {
-        VerticalLayout {
-            padding: 10px;
-            spacing: 6px;
-            Text {
-                text: root.deal.details-label;
-                font-weight: 700;
-                wrap: word-wrap;
-            }
-
-            Muted {
-                text: root.deal.details-hint;
-            }
-
-            TextEdit {
-                text <=> root.draft;
-                min-height: 80px;
-                wrap: word-wrap;
-                read-only: root.confirming == "details";
-            }
-
-            if root.details-error != "": Text {
-                text: root.details-error;
-                color: #c62828;
-                font-size: 12px;
-                wrap: word-wrap;
-            }
-            if root.confirming != "details": Button {
-                text: "Send…";
-                enabled: root.draft != "" && root.details-error == "";
-                clicked => {
-                    root.confirming = "details";
-                }
-            }
-            if root.confirming == "details": Tip {
-                text: "Check every character. If these details are wrong, what they send can go to someone else and be lost for good.";
-            }
-            if root.confirming == "details": HorizontalLayout {
-                spacing: 8px;
-                Button {
-                    text: "Confirm and send";
-                    primary: true;
-                    enabled: root.details-error == "";
-                    clicked => {
-                        root.give-details(root.draft);
-                    }
-                }
-
-                Button {
-                    text: "Edit";
-                    clicked => {
-                        root.confirming = "";
-                    }
-                }
-            }
-        }
-    }
-    if root.deal.can-send: Card {
-        VerticalLayout {
-            padding: 10px;
-            spacing: 6px;
-            Text {
-                text: root.deal.send-hint;
-                wrap: word-wrap;
-            }
-
-            Muted {
-                text: "Only press it once it has actually left your account or wallet. They will rely on it.";
-            }
-
-            Button {
-                text: root.deal.send-label;
-                primary: true;
-                clicked => {
-                    root.mark-sent();
-                }
-            }
-        }
-    }
-}
-
-// what can be done with an ongoing trade, from the header of its page. a trade can only be
-// deleted once it is over.
-component TradeActions inherits HorizontalLayout {
-    callback conclude();
-    callback archive();
-    spacing: 6px;
-    alignment: end;
-    Button {
-        text: "Conclude";
-        y: (parent.height - self.height) / 2;
-        clicked => {
-            root.conclude();
-        }
-    }
-
-    Button {
-        text: "Archive";
-        y: (parent.height - self.height) / 2;
-        clicked => {
-            root.archive();
-        }
-    }
-}
-
-// one thing in the relay report popup: each relay's answer, and the raw event behind a toggle
-component SentReport inherits VerticalLayout {
-    in property <SentItem> item;
-    property <bool> show-json;
-    callback open-relay-site(string);
-    spacing: 4px;
-
-    Text {
-        text: root.item.title;
-        font-weight: 700;
-        wrap: word-wrap;
-    }
-
-    if root.item.note != "": Muted {
-        text: root.item.note;
-    }
-
-    for answer in root.item.answers: HorizontalLayout {
-        spacing: 8px;
-        Text {
-            width: 16px;
-            text: answer.state == "ok" ? "✓" : answer.state == "failed" ? "✗" : "…";
-            color: answer.state == "ok" ? #2e9e44 : answer.state == "failed" ? #d33 : Palette.foreground;
-            font-weight: 700;
-        }
-
-        VerticalLayout {
-            horizontal-stretch: 1;
-            Text {
-                text: answer.host;
-                color: #f7931a;
-                overflow: elide;
-                TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.open-relay-site(answer.host);
-                    }
-                }
-            }
-
-            if answer.error != "": Muted {
-                text: answer.error;
-            }
-        }
-    }
-
-    if root.item.json != "": Text {
-        text: root.show-json ? "hide raw event" : "show raw event";
-        color: #f7931a;
-        font-size: 12px;
-        TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.show-json = !root.show-json;
-            }
-        }
-    }
-
-    if root.show-json: TextEdit {
-        text: root.item.json;
-        read-only: true;
-        wrap: char-wrap;
-        font-size: 11px;
-        height: 220px;
-    }
-}
-
-component TradeCard inherits Rectangle {
-    in property <TradeItem> item;
-    callback clicked;
-    background: Palette.alternate-background;
-    border-radius: 8px;
-    border-width: 1px;
-    border-color: Palette.border;
-    opacity: root.item.blocked ? 0.5 : 1;
-    TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
-
-    VerticalLayout {
-        padding: 10px;
-        spacing: 2px;
-        Identity {
-            text: root.item.peer-name + (root.item.blocked ? " (blocked)" : "");
-            tint: root.item.peer-color;
-        }
-
-        Text {
-            text: root.item.status;
-            color: #f7931a;
-            font-size: 12px;
-            font-weight: 700;
-            wrap: word-wrap;
-        }
-
-        Muted {
-            text: root.item.summary;
-        }
-
-        if root.item.last != "": Text {
-            text: root.item.last;
-            overflow: elide;
-            font-size: 13px;
-        }
-    }
-}
+export { OfferItem, TradeItem, TradeView, DealRow, DealView, MsgItem, ReportItem, PersonItem, RelayItem, RelayAnswer, SentItem, PayItem } from "models.slint";
 
 export component AppWindow inherits Window {
     title: "bitcoin smol";
@@ -677,7 +28,9 @@ export component AppWindow inherits Window {
 
     // market
     in property <[OfferItem]> offers;
-    in property <[string]> currencies;
+    // starts with "all" so the filter's initial "all" is already in the model.
+    // setup_ui replaces it with the full list, which keeps "all" first.
+    in property <[string]> currencies: ["all"];
     in-out property <string> filter-side: "all";
     in-out property <string> filter-currency: "all";
     in property <bool> loading;
@@ -857,1249 +210,212 @@ export component AppWindow inherits Window {
             Rectangle {
                 max-width: root.max-content-width;
                 // ---------------------------------------------------------------- market
-                if root.page == 0: VerticalLayout {
-                    padding: 16px;
-                    spacing: 8px;
-                    if root.newcomer: Tip {
-                        text: "New here? Read how this works and how to trade safely →";
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.open-docs();
-                            }
-                        }
+                if root.page == 0: MarketPage {
+                    offers: root.offers;
+                    currencies: root.currencies;
+                    filter-side <=> root.filter-side;
+                    filter-currency <=> root.filter-currency;
+                    loading: root.loading;
+                    newcomer: root.newcomer;
+                    refresh-offers => {
+                        root.refresh-offers();
                     }
-
-                    HorizontalLayout {
-                        spacing: 8px;
-                        ComboBox {
-                            model: ["all", "sell", "buy"];
-                            current-value <=> root.filter-side;
-                            selected => {
-                                root.filters-changed();
-                            }
-                        }
-
-                        ComboBox {
-                            model: root.currencies;
-                            current-value <=> root.filter-currency;
-                            selected => {
-                                root.filters-changed();
-                            }
-                        }
-
-                        Button {
-                            text: root.loading ? "…" : "Refresh";
-                            enabled: !root.loading;
-                            clicked => {
-                                root.refresh-offers();
-                            }
-                        }
+                    filters-changed => {
+                        root.filters-changed();
                     }
-
-                    if root.offers.length == 0: Muted {
-                        text: root.loading ? "loading offers from the last 3 hours…" : "no offers in the last 3 hours. create one!";
-                        horizontal-alignment: center;
+                    open-offer(id) => {
+                        root.open-offer(id);
                     }
-                    ListView {
-                        vertical-stretch: 1;
-                        for offer in root.offers: VerticalLayout {
-                            padding-bottom: 8px;
-                            padding-right: 6px;
-                            Card {
-                                TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.open-offer(offer.id);
-                                    }
-                                }
-
-                                VerticalLayout {
-                                    padding: 10px;
-                                    spacing: 4px;
-                                    HorizontalLayout {
-                                        spacing: 8px;
-                                        SideBadge {
-                                            side: offer.side;
-                                        }
-
-                                        Text {
-                                            text: offer.currency + " " + offer.premium;
-                                            font-weight: 700;
-                                            vertical-alignment: center;
-                                        }
-
-                                        Text {
-                                            text: offer.price;
-                                            horizontal-alignment: right;
-                                            vertical-alignment: center;
-                                            horizontal-stretch: 1;
-                                        }
-                                    }
-
-                                    Text {
-                                        text: offer.amount;
-                                        font-size: 13px;
-                                    }
-
-                                    Text {
-                                        text: offer.payments;
-                                        wrap: word-wrap;
-                                        font-size: 13px;
-                                    }
-
-                                    if offer.description != "": Text {
-                                        text: offer.description;
-                                        wrap: word-wrap;
-                                        overflow: elide;
-                                        max-height: 40px;
-                                        font-size: 13px;
-                                    }
-                                    HorizontalLayout {
-                                        spacing: 4px;
-                                        if offer.mine: Muted {
-                                            text: "you";
-                                            vertical-alignment: center;
-                                        }
-                                        if !offer.mine: Identity {
-                                            text: offer.maker-name;
-                                            tint: offer.maker-color;
-                                            font-size: 12px;
-                                        }
-                                        Muted {
-                                            text: "· " + offer.age;
-                                            vertical-alignment: center;
-                                            horizontal-stretch: 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    open-docs => {
+                        root.open-docs();
                     }
                 }
 
                 // ---------------------------------------------------------------- offer detail
-                if root.page == 1: sv1 := ScrollView {
-                    content-width: self.visible-width;
-                    VerticalLayout {
-                        width: sv1.visible-width;
-                        padding: 16px;
-                        spacing: 10px;
-                        alignment: start;
-                        HorizontalLayout {
-                            spacing: 8px;
-                            SideBadge {
-                                side: root.current-offer.side;
-                            }
-
-                            Title {
-                                text: "bitcoin for " + root.current-offer.currency;
-                            }
-                        }
-
-                        Card {
-                            VerticalLayout {
-                                padding: 12px;
-                                spacing: 6px;
-                                Text {
-                                    text: "price: market " + root.current-offer.premium + " (" + root.current-offer.price-api + ")";
-                                    wrap: word-wrap;
-                                }
-
-                                Text {
-                                    text: root.current-offer.price;
-                                    font-weight: 700;
-                                }
-
-                                Text {
-                                    text: "amount: " + root.current-offer.amount;
-                                    wrap: word-wrap;
-                                }
-
-                                Text {
-                                    text: "payment: " + root.current-offer.payments;
-                                    wrap: word-wrap;
-                                }
-
-                                Text {
-                                    text: "bitcoin via: " + root.current-offer.bitcoin;
-                                    wrap: word-wrap;
-                                }
-
-                                Muted {
-                                    text: "negotiation relays: " + root.current-offer.relays;
-                                }
-
-                                Muted {
-                                    text: "posted " + root.current-offer.age;
-                                }
-                            }
-                        }
-
-                        if root.current-offer.description != "": Card {
-                            VerticalLayout {
-                                padding: 12px;
-                                Text {
-                                    text: root.current-offer.description;
-                                    wrap: word-wrap;
-                                }
-                            }
-                        }
-                        if !root.current-offer.mine: HorizontalLayout {
-                            spacing: 6px;
-                            alignment: start;
-                            Text {
-                                text: "maker:";
-                                vertical-alignment: center;
-                            }
-
-                            Identity {
-                                text: root.current-offer.maker-name;
-                                tint: root.current-offer.maker-color;
-                                TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.open-profile(root.current-offer.maker);
-                                    }
-                                }
-                            }
-                        }
-
-                        Button {
-                            text: "Maker's trade history";
-                            clicked => {
-                                root.open-profile(root.current-offer.maker);
-                            }
-                        }
-
-                        // from the taker's point of view, like the badge
-                        if !root.current-offer.mine: Rectangle {
-                            height: 40px;
-                            border-radius: 4px;
-                            border-width: 2px;
-                            border-color: #f7931a;
-                            background: Palette.control-background.darker(take.pressed ? 0.15 : take.has-hover ? 0.07 : 0);
-                            take := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.contact-maker(root.current-offer.id);
-                                }
-                            }
-
-                            HorizontalLayout {
-                                alignment: center;
-                                spacing: 5px;
-                                Text {
-                                    text: root.current-offer.side == "sell" ? "Buy Bitcoin from" : "Sell Bitcoin to";
-                                    font-weight: 700;
-                                    vertical-alignment: center;
-                                }
-
-                                Identity {
-                                    text: root.current-offer.maker-name;
-                                    tint: root.current-offer.maker-color;
-                                }
-                            }
-                        }
-                        if root.current-offer.mine: Button {
-                            text: "Close offer";
-                            clicked => {
-                                root.close-offer(root.current-offer.id);
-                                root.page = 0;
-                            }
-                        }
+                if root.page == 1: OfferPage {
+                    current-offer: root.current-offer;
+                    open-profile(who) => {
+                        root.open-profile(who);
+                    }
+                    contact-maker(id) => {
+                        root.contact-maker(id);
+                    }
+                    close-offer(id) => {
+                        root.close-offer(id);
+                    }
+                    back => {
+                        root.page = 0;
                     }
                 }
 
                 // ---------------------------------------------------------------- create
-                if root.page == 2: sv2 := ScrollView {
-                    content-width: self.visible-width;
-                    VerticalLayout {
-                        width: sv2.visible-width;
-                        padding: 16px;
-                        spacing: 12px;
-                        alignment: start;
-                        Title {
-                            text: "New offer";
-                        }
-
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Text {
-                                text: "I want to";
-                                vertical-alignment: center;
-                            }
-
-                            ComboBox {
-                                width: 80px;
-                                model: ["sell", "buy"];
-                                current-value <=> root.create-side;
-                            }
-
-                            Text {
-                                text: "bitcoin for";
-                                vertical-alignment: center;
-                            }
-
-                            ComboBox {
-                                width: 90px;
-                                model: root.create-currencies;
-                                current-value <=> root.create-currency;
-                                selected(c) => {
-                                    root.create-currency-changed(c);
-                                }
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Text {
-                                text: "premium";
-                                vertical-alignment: center;
-                            }
-
-                            LineEdit {
-                                width: 80px;
-                                text <=> root.create-premium;
-                                placeholder-text: "+1%";
-                                input-type: InputType.text;
-                                edited => {
-                                    root.create-premium-changed();
-                                }
-                            }
-                        }
-
-                        Muted {
-                            text: root.create-preview;
-                        }
-
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Text {
-                                text: "amount";
-                                vertical-alignment: center;
-                            }
-
-                            LineEdit {
-                                width: 80px;
-                                text <=> root.create-amount-min;
-                                placeholder-text: "min";
-                                input-type: InputType.decimal;
-                                edited => {
-                                    if root.create-amount-linked {
-                                        root.create-amount-max = self.text;
-                                    }
-                                }
-                            }
-
-                            Text {
-                                text: "to";
-                                vertical-alignment: center;
-                            }
-
-                            LineEdit {
-                                width: 80px;
-                                text <=> root.create-amount-max;
-                                placeholder-text: "max";
-                                input-type: InputType.decimal;
-                                edited => {
-                                    root.create-amount-linked = self.text == root.create-amount-min;
-                                }
-                            }
-
-                            Text {
-                                text: root.create-currency;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        Text {
-                            text: "bitcoin sent via";
-                            font-weight: 700;
-                        }
-
-                        VerticalLayout {
-                            for row[r] in Math.ceil(root.bitcoin-options.length / 3): HorizontalLayout {
-                                spacing: 8px;
-                                for col in 3: Rectangle {
-                                    horizontal-stretch: 1;
-                                    height: 32px;
-                                    if r * 3 + col < root.bitcoin-options.length: CheckBox {
-                                        x: 0;
-                                        width: parent.width;
-                                        text: root.bitcoin-options[r * 3 + col].name;
-                                        checked: root.bitcoin-options[r * 3 + col].checked;
-                                        toggled => {
-                                            root.toggle-bitcoin(self.text, self.checked);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Text {
-                            text: "fiat payment methods";
-                            font-weight: 700;
-                        }
-
-                        VerticalLayout {
-                            // a simple two-column grid of checkboxes
-                            for row[r] in Math.ceil(root.payment-options.length / 2): HorizontalLayout {
-                                spacing: 8px;
-                                for col in 2: Rectangle {
-                                    horizontal-stretch: 1;
-                                    height: 32px;
-                                    if r * 2 + col < root.payment-options.length: CheckBox {
-                                        x: 0;
-                                        width: parent.width;
-                                        text: root.payment-options[r * 2 + col].name;
-                                        checked: root.payment-options[r * 2 + col].checked;
-                                        toggled => {
-                                            root.toggle-payment(self.text, self.checked);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if root.payment-more.length > 0: Text {
-                            text: root.create-more-payments ? "show less" : "show more (" + root.payment-more.length + ")";
-                            color: #f7931a;
-                            font-size: 13px;
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.create-more-payments = !root.create-more-payments;
-                                }
-                            }
-                        }
-
-                        if root.create-more-payments: VerticalLayout {
-                            spacing: 0px;
-                            for row[r] in Math.ceil(root.payment-more.length / 2): HorizontalLayout {
-                                spacing: 8px;
-                                for col in 2: Rectangle {
-                                    horizontal-stretch: 1;
-                                    height: 32px;
-                                    if r * 2 + col < root.payment-more.length: CheckBox {
-                                        x: 0;
-                                        width: parent.width;
-                                        text: root.payment-more[r * 2 + col].name;
-                                        checked: root.payment-more[r * 2 + col].checked;
-                                        toggled => {
-                                            root.toggle-payment(self.text, self.checked);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        LineEdit {
-                            text <=> root.create-other-payments;
-                            placeholder-text: "other payment methods, comma-separated";
-                        }
-
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Switch {
-                                checked <=> root.create-custom;
-                            }
-
-                            Text {
-                                text: "custom price source, relays and description";
-                                vertical-alignment: center;
-                                wrap: word-wrap;
-                                horizontal-stretch: 1;
-                            }
-                        }
-
-                        if root.create-custom: VerticalLayout {
-                            spacing: 12px;
-                            HorizontalLayout {
-                                spacing: 8px;
-                                Text {
-                                    text: "market price from";
-                                    vertical-alignment: center;
-                                }
-
-                                ComboBox {
-                                    model: root.create-apis;
-                                    current-value <=> root.create-api;
-                                    selected(a) => {
-                                        root.create-api-changed(a);
-                                    }
-                                }
-                            }
-
-                            Text {
-                                text: "relays where to publish this offer";
-                                font-weight: 700;
-                            }
-
-                            LineEdit {
-                                text <=> root.create-publish-relays;
-                                placeholder-text: "wss://…, comma-separated";
-                            }
-
-                            Muted {
-                                text: "the relays in your relay list (NIP-65) get it too, that's where the people who trust you look for your offers.";
-                            }
-
-                            Text {
-                                text: "relays for the negotiation";
-                                font-weight: 700;
-                            }
-
-                            LineEdit {
-                                text <=> root.create-relays;
-                                placeholder-text: "wss://…, comma-separated";
-                            }
-
-                            Text {
-                                text: "description";
-                                font-weight: 700;
-                            }
-
-                            TextEdit {
-                                text <=> root.create-description;
-                                min-height: 90px;
-                                wrap: word-wrap;
-                            }
-                        }
-
-                        Button {
-                            text: "Publish offer";
-                            primary: true;
-                            clicked => {
-                                root.publish-offer();
-                            }
-                        }
+                if root.page == 2: CreatePage {
+                    create-currencies: root.create-currencies;
+                    create-apis: root.create-apis;
+                    payment-options <=> root.payment-options;
+                    payment-more <=> root.payment-more;
+                    bitcoin-options <=> root.bitcoin-options;
+                    create-side <=> root.create-side;
+                    create-currency <=> root.create-currency;
+                    create-api <=> root.create-api;
+                    create-premium <=> root.create-premium;
+                    create-amount-min <=> root.create-amount-min;
+                    create-amount-max <=> root.create-amount-max;
+                    create-amount-linked <=> root.create-amount-linked;
+                    create-other-payments <=> root.create-other-payments;
+                    create-relays <=> root.create-relays;
+                    create-publish-relays <=> root.create-publish-relays;
+                    create-description <=> root.create-description;
+                    create-preview: root.create-preview;
+                    create-custom <=> root.create-custom;
+                    create-more-payments <=> root.create-more-payments;
+                    create-currency-changed(c) => {
+                        root.create-currency-changed(c);
+                    }
+                    create-api-changed(a) => {
+                        root.create-api-changed(a);
+                    }
+                    create-premium-changed => {
+                        root.create-premium-changed();
+                    }
+                    toggle-payment(name, checked) => {
+                        root.toggle-payment(name, checked);
+                    }
+                    toggle-bitcoin(name, checked) => {
+                        root.toggle-bitcoin(name, checked);
+                    }
+                    publish-offer => {
+                        root.publish-offer();
                     }
                 }
 
                 // ---------------------------------------------------------------- trades
-                if root.page == 3: sv3 := ScrollView {
-                    content-width: self.visible-width;
-                    VerticalLayout {
-                        width: sv3.visible-width;
-                        padding: 16px;
-                        spacing: 10px;
-                        alignment: start;
-                        Title {
-                            text: "Your open offers";
-                        }
-
-                        if root.my-offers.length == 0: Muted {
-                            text: "none.";
-                        }
-                        for offer in root.my-offers: Card {
-                            HorizontalLayout {
-                                padding: 10px;
-                                spacing: 8px;
-                                SideBadge {
-                                    side: offer.side;
-                                    y: (parent.height - self.height) / 2;
-                                }
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    spacing: 2px;
-                                    Text {
-                                        text: offer.currency + " " + offer.premium + " · " + offer.price;
-                                        font-weight: 700;
-                                        overflow: elide;
-                                    }
-
-                                    Muted {
-                                        text: offer.amount + " · " + offer.payments + " · posted " + offer.age;
-                                    }
-                                }
-
-                                Button {
-                                    text: "Close";
-                                    clicked => {
-                                        root.close-offer(offer.id);
-                                    }
-                                }
-                            }
-                        }
-
-                        Title {
-                            text: "Ongoing";
-                        }
-
-                        if root.ongoing-trades.length == 0: Muted {
-                            text: "no ongoing trades. contact a maker in the market, or wait for takers of your offers.";
-                        }
-                        for t in root.ongoing-trades: TradeCard {
-                            item: t;
-                            clicked => {
-                                root.open-trade(t.key);
-                            }
-                        }
-
-                        if root.past-trades.length > 0: Title {
-                            text: "History";
-                        }
-                        for t in root.past-trades: TradeCard {
-                            item: t;
-                            opacity: 0.75;
-                            clicked => {
-                                root.open-past-trade(t.key);
-                            }
-                        }
+                if root.page == 3: TradesPage {
+                    my-offers: root.my-offers;
+                    ongoing-trades: root.ongoing-trades;
+                    past-trades: root.past-trades;
+                    close-offer(id) => {
+                        root.close-offer(id);
+                    }
+                    open-trade(key) => {
+                        root.open-trade(key);
+                    }
+                    open-past-trade(key) => {
+                        root.open-past-trade(key);
                     }
                 }
 
                 // ---------------------------------------------------------------- trade
-                if root.page == 4: VerticalLayout {
-                    padding: 16px;
-                    spacing: 8px;
-                    // the offer, who it is with, and what can be done with the whole trade
-                    Card {
-                        VerticalLayout {
-                            padding: 10px;
-                            spacing: 8px;
-                            HorizontalLayout {
-                                spacing: 8px;
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    spacing: 4px;
-                                    alignment: center;
-                                    Text {
-                                        text: root.trade.summary;
-                                        font-weight: 700;
-                                        font-size: 13px;
-                                        wrap: word-wrap;
-                                    }
-
-                                    Identity {
-                                        text: root.trade.peer-name + (root.trade.blocked ? " (blocked)" : "");
-                                        tint: root.trade.peer-color;
-                                        font-size: 13px;
-                                        TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                root.open-profile(root.trade.peer);
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if root.trade.ongoing && !root.trade-concluding && root.trade-wide: TradeActions {
-                                    conclude => {
-                                        root.trade-concluding = true;
-                                    }
-                                    archive => {
-                                        root.archive-trade();
-                                    }
-                                }
-                            }
-
-                            // on narrow screens they go under it, so the offer keeps the width
-                            if root.trade.ongoing && !root.trade-concluding && !root.trade-wide: TradeActions {
-                                alignment: start;
-                                conclude => {
-                                    root.trade-concluding = true;
-                                }
-                                archive => {
-                                    root.archive-trade();
-                                }
-                            }
-
-                            if root.trade-concluding: VerticalLayout {
-                                spacing: 8px;
-                                Text {
-                                    text: "How did it go?";
-                                    font-weight: 700;
-                                }
-
-                                conclusion := LineEdit {
-                                    placeholder-text: "optional comment, e.g. \"$5 via PIX, fast\"";
-                                }
-
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    Button {
-                                        text: "✓ Success";
-                                        clicked => {
-                                            root.conclude-trade(true, conclusion.text);
-                                        }
-                                    }
-
-                                    Button {
-                                        text: "✗ Failure";
-                                        clicked => {
-                                            root.conclude-trade(false, conclusion.text);
-                                        }
-                                    }
-
-                                    Button {
-                                        text: "Cancel";
-                                        clicked => {
-                                            root.trade-concluding = false;
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                if root.page == 4: TradePage {
+                    trade: root.trade;
+                    messages: root.messages;
+                    deal: root.deal;
+                    trade-confirming <=> root.trade-confirming;
+                    trade-details-draft <=> root.trade-details-draft;
+                    trade-concluding <=> root.trade-concluding;
+                    trade-confirm-delete <=> root.trade-confirm-delete;
+                    trade-wide: root.trade-wide;
+                    open-profile(who) => {
+                        root.open-profile(who);
                     }
-
-                    // on wide screens the deal sits next to the chat, otherwise above it
-                    if root.deal.active && !root.trade-wide: sv-deal-top := ScrollView {
-                        height: min(dp-top.preferred-height, root.height * 0.45);
-                        // long unbreakable values, like an invoice, would widen it and push the panel sideways
-                        content-width: self.visible-width;
-                        VerticalLayout {
-                            width: sv-deal-top.visible-width;
-                            padding-right: 6px;
-                            dp-top := DealPanel {
-                                compact: true;
-                                deal: root.deal;
-                                confirming <=> root.trade-confirming;
-                                draft <=> root.trade-details-draft;
-                                pick-amount(a) => {
-                                    root.trade-pick-amount(a);
-                                }
-                                quote-price(p) => {
-                                    root.trade-quote-price(p);
-                                }
-                                pick-bitcoin(m) => {
-                                    root.trade-pick-bitcoin(m);
-                                }
-                                pick-payment(m) => {
-                                    root.trade-pick-payment(m);
-                                }
-                                give-details(d) => {
-                                    root.trade-give-details(d);
-                                }
-                                check-details(d) => {
-                                    return root.trade-check-details(d);
-                                }
-                                mark-sent => {
-                                    root.trade-mark-sent();
-                                }
-                            }
-                        }
+                    archive-trade => {
+                        root.archive-trade();
                     }
-                    HorizontalLayout {
-                        vertical-stretch: 1;
-                        spacing: 12px;
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            spacing: 8px;
-                            ListView {
-                                vertical-stretch: 1;
-                                for msg in root.messages: HorizontalLayout {
-                                    padding-bottom: 6px;
-                                    padding-right: 6px;
-                                    alignment: msg.mine ? end : start;
-                                    if !msg.meta: Rectangle {
-                                        width: min(300px, plain-text.preferred-width + 16px);
-                                        height: plain-layout.preferred-height;
-                                        border-radius: 10px;
-                                        background: msg.mine ? #f7931a33 : Palette.alternate-background;
-                                        plain-layout := VerticalLayout {
-                                            padding: 8px;
-                                            plain-text := Text {
-                                                text: msg.text;
-                                                wrap: word-wrap;
-                                            }
-
-                                            Muted {
-                                                text: msg.time;
-                                                horizontal-alignment: right;
-                                                TouchArea {
-                                                    mouse-cursor: pointer;
-                                                    clicked => {
-                                                        root.open-message-report(msg.id);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    // a structured message: an update to the deal, not something said
-                                    if msg.meta: Rectangle {
-                                        width: min(300px, meta-text.preferred-width + 16px);
-                                        height: meta-layout.preferred-height;
-                                        border-radius: 6px;
-                                        border-width: 1px;
-                                        border-color: #1565c0;
-                                        background: #1565c022;
-                                        opacity: msg.ignored ? 0.5 : 1;
-                                        meta-layout := VerticalLayout {
-                                            padding: 8px;
-                                            spacing: 2px;
-                                            meta-text := Text {
-                                                text: msg.text;
-                                                font-size: 13px;
-                                                font-weight: 700;
-                                                wrap: word-wrap;
-                                            }
-
-                                            Muted {
-                                                text: (msg.ignored ? "ignored, it didn't fit the deal · " : "") + msg.time;
-                                                horizontal-alignment: right;
-                                                TouchArea {
-                                                    mouse-cursor: pointer;
-                                                    clicked => {
-                                                        root.open-message-report(msg.id);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if root.trade.ongoing && !root.trade.blocked: HorizontalLayout {
-                                spacing: 8px;
-                                // enter sends, shift+enter goes to a new line
-                                FocusScope {
-                                    horizontal-stretch: 1;
-                                    height: 64px;
-                                    capture-key-pressed(event) => {
-                                        if event.text == Key.Return && !event.modifiers.shift {
-                                            root.send-message(input.text);
-                                            input.text = "";
-                                            return accept;
-                                        }
-                                        return reject;
-                                    }
-                                    input := TextEdit {
-                                        width: parent.width;
-                                        height: parent.height;
-                                        placeholder-text: "message";
-                                        wrap: word-wrap;
-                                    }
-                                }
-
-                                Button {
-                                    text: "Send";
-                                    y: (parent.height - self.height) / 2;
-                                    clicked => {
-                                        root.send-message(input.text);
-                                        input.text = "";
-                                    }
-                                }
-                            }
-                            if !root.trade.ongoing: HorizontalLayout {
-                                spacing: 8px;
-                                Muted {
-                                    text: "this trade is over. messages are kept here as they were.";
-                                    vertical-alignment: center;
-                                    horizontal-stretch: 1;
-                                }
-
-                                Button {
-                                    text: root.trade-confirm-delete ? "Really delete?" : "Delete";
-                                    y: (parent.height - self.height) / 2;
-                                    clicked => {
-                                        if root.trade-confirm-delete {
-                                            root.delete-trade();
-                                        } else {
-                                            root.trade-confirm-delete = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if root.deal.active && root.trade-wide: sv-deal := ScrollView {
-                            width: 340px;
-                            content-width: self.visible-width;
-                            VerticalLayout {
-                                width: sv-deal.visible-width;
-                                padding-right: 6px;
-                                DealPanel {
-                                    deal: root.deal;
-                                    confirming <=> root.trade-confirming;
-                                    draft <=> root.trade-details-draft;
-                                    pick-amount(a) => {
-                                        root.trade-pick-amount(a);
-                                    }
-                                    quote-price(p) => {
-                                        root.trade-quote-price(p);
-                                    }
-                                    pick-bitcoin(m) => {
-                                        root.trade-pick-bitcoin(m);
-                                    }
-                                    pick-payment(m) => {
-                                        root.trade-pick-payment(m);
-                                    }
-                                    give-details(d) => {
-                                        root.trade-give-details(d);
-                                    }
-                                    check-details(d) => {
-                                        return root.trade-check-details(d);
-                                    }
-                                    mark-sent => {
-                                        root.trade-mark-sent();
-                                    }
-                                }
-                            }
-                        }
+                    conclude-trade(success, comment) => {
+                        root.conclude-trade(success, comment);
+                    }
+                    send-message(text) => {
+                        root.send-message(text);
+                    }
+                    trade-pick-amount(text) => {
+                        root.trade-pick-amount(text);
+                    }
+                    trade-quote-price(text) => {
+                        root.trade-quote-price(text);
+                    }
+                    trade-pick-bitcoin(m) => {
+                        root.trade-pick-bitcoin(m);
+                    }
+                    trade-pick-payment(m) => {
+                        root.trade-pick-payment(m);
+                    }
+                    trade-give-details(d) => {
+                        root.trade-give-details(d);
+                    }
+                    trade-check-details(d) => {
+                        return root.trade-check-details(d);
+                    }
+                    trade-mark-sent => {
+                        root.trade-mark-sent();
+                    }
+                    delete-trade => {
+                        root.delete-trade();
+                    }
+                    open-message-report(id) => {
+                        root.open-message-report(id);
                     }
                 }
 
                 // ---------------------------------------------------------------- profile
-                if root.page == 5: sv5 := ScrollView {
-                    content-width: self.visible-width;
-                    VerticalLayout {
-                        width: sv5.visible-width;
-                        padding: 16px;
-                        spacing: 10px;
-                        alignment: start;
-                        if root.profile-is-me: Title {
-                            text: "You";
-                        }
-                        if !root.profile-is-me: Identity {
-                            text: root.profile-name;
-                            tint: root.profile-color;
-                            font-size: 20px;
-                        }
-
-                        LineEdit {
-                            text: root.profile-npub;
-                            read-only: true;
-                        }
-
-                        if !root.profile-is-me: HorizontalLayout {
-                            spacing: 8px;
-                            label-input := LineEdit {
-                                text: root.profile-label;
-                                placeholder-text: "label, only you see it";
-                                accepted => {
-                                    root.set-label(self.text);
-                                }
-                            }
-
-                            Button {
-                                text: "Save";
-                                enabled: label-input.text != root.profile-label;
-                                clicked => {
-                                    root.set-label(label-input.text);
-                                }
-                            }
-                        }
-
-                        if !root.profile-is-me: HorizontalLayout {
-                            spacing: 8px;
-                            Button {
-                                text: "Message";
-                                enabled: !root.profile-blocked;
-                                clicked => {
-                                    root.open-trade(root.profile-npub);
-                                }
-                            }
-
-                            Button {
-                                text: root.profile-blocked ? "Unblock" : "Block";
-                                clicked => {
-                                    root.set-blocked(!root.profile-blocked);
-                                }
-                            }
-                        }
-
-                        Text {
-                            text: root.profile-is-me ? "Your trade reports" : "Our history with them";
-                            font-weight: 700;
-                        }
-
-                        if root.own-reports.length == 0: Muted {
-                            text: "you have never traded with them.";
-                        }
-                        for rep in root.own-reports: Card {
-                            HorizontalLayout {
-                                padding: 8px;
-                                spacing: 8px;
-                                Text {
-                                    text: rep.success ? "✓" : "✗";
-                                    color: rep.success ? #2e7d32 : #c62828;
-                                    font-weight: 700;
-                                }
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    if rep.subject-name != "": HorizontalLayout {
-                                        spacing: 4px;
-                                        Muted {
-                                            text: "with";
-                                            vertical-alignment: center;
-                                        }
-
-                                        Identity {
-                                            text: rep.subject-name;
-                                            tint: rep.subject-color;
-                                            font-size: 12px;
-                                            horizontal-stretch: 1;
-                                        }
-                                    }
-                                    Text {
-                                        text: rep.comment != "" ? rep.comment : (rep.success ? "successful trade" : "failed trade");
-                                        wrap: word-wrap;
-                                    }
-                                }
-
-                                Muted {
-                                    text: rep.time;
-                                }
-                            }
-                        }
-
-                        if !root.profile-is-me: Text {
-                            text: "What the people we trust say";
-                            font-weight: 700;
-                        }
-
-                        if !root.profile-is-me: Muted {
-                            text: root.others-note;
-                        }
-
-                        for rep in root.others-reports: Card {
-                            HorizontalLayout {
-                                padding: 8px;
-                                spacing: 8px;
-                                Text {
-                                    text: rep.success ? "✓" : "✗";
-                                    color: rep.success ? #2e7d32 : #c62828;
-                                    font-weight: 700;
-                                }
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    Text {
-                                        text: rep.comment != "" ? rep.comment : (rep.success ? "successful trade" : "failed trade");
-                                        wrap: word-wrap;
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: 4px;
-                                        Muted {
-                                            text: "by";
-                                            vertical-alignment: center;
-                                        }
-
-                                        Identity {
-                                            text: rep.author-name;
-                                            tint: rep.author-color;
-                                            font-size: 12px;
-                                        }
-
-                                        Muted {
-                                            text: "· " + rep.time;
-                                            vertical-alignment: center;
-                                            horizontal-stretch: 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !root.profile-is-me: VerticalLayout {
-                            spacing: 8px;
-                            Text {
-                                text: "Report a finished trade";
-                                font-weight: 700;
-                            }
-
-                            comment := LineEdit {
-                                placeholder-text: "optional comment, e.g. \"$5 via PIX, fast\"";
-                            }
-
-                            HorizontalLayout {
-                                spacing: 8px;
-                                Button {
-                                    text: "✓ Success";
-                                    clicked => {
-                                        root.report-trade(true, comment.text);
-                                        comment.text = "";
-                                    }
-                                }
-
-                                Button {
-                                    text: "✗ Failure";
-                                    clicked => {
-                                        root.report-trade(false, comment.text);
-                                        comment.text = "";
-                                    }
-                                }
-                            }
-
-                        }
+                if root.page == 5: ProfilePage {
+                    profile-npub: root.profile-npub;
+                    profile-name: root.profile-name;
+                    profile-color: root.profile-color;
+                    profile-label: root.profile-label;
+                    profile-blocked: root.profile-blocked;
+                    profile-is-me: root.profile-is-me;
+                    own-reports: root.own-reports;
+                    others-reports: root.others-reports;
+                    others-note: root.others-note;
+                    open-trade(peer) => {
+                        root.open-trade(peer);
+                    }
+                    report-trade(success, comment) => {
+                        root.report-trade(success, comment);
+                    }
+                    set-blocked(blocked) => {
+                        root.set-blocked(blocked);
+                    }
+                    set-label(label) => {
+                        root.set-label(label);
                     }
                 }
 
                 // ---------------------------------------------------------------- people
-                if root.page == 7: VerticalLayout {
-                    padding: 16px;
-                    spacing: 8px;
-                    Title {
-                        text: "People";
+                if root.page == 7: PeoplePage {
+                    people: root.people;
+                    people-filter <=> root.people-filter;
+                    people-filter-changed(t) => {
+                        root.people-filter-changed(t);
                     }
-
-                    LineEdit {
-                        text <=> root.people-filter;
-                        placeholder-text: "search labels or npubs";
-                        edited(t) => {
-                            root.people-filter-changed(t);
-                        }
-                    }
-
-                    if root.people.length == 0: Muted {
-                        text: root.people-filter == "" ? "nobody labeled yet." : "nobody matches.";
-                    }
-                    ListView {
-                        vertical-stretch: 1;
-                        for person in root.people: VerticalLayout {
-                            padding-bottom: 8px;
-                            padding-right: 6px;
-                            Card {
-                                TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.open-profile(person.npub);
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    padding: 10px;
-                                    spacing: 8px;
-                                    Identity {
-                                        text: person.label;
-                                        tint: person.color;
-                                    }
-
-                                    Muted {
-                                        text: person.short;
-                                        vertical-alignment: center;
-                                        horizontal-alignment: right;
-                                        horizontal-stretch: 1;
-                                    }
-                                }
-                            }
-                        }
+                    open-profile(npub) => {
+                        root.open-profile(npub);
                     }
                 }
 
                 // ---------------------------------------------------------------- settings
-                if root.page == 6: sv6 := ScrollView {
-                    content-width: self.visible-width;
-                    VerticalLayout {
-                        width: sv6.visible-width;
-                        padding: 16px;
-                        spacing: 10px;
-                        alignment: start;
-                        Title {
-                            text: "Your key";
-                        }
-
-                        LineEdit {
-                            text: root.npub;
-                            read-only: true;
-                        }
-
-                        HorizontalLayout {
-                            spacing: 8px;
-                            Button {
-                                text: "My history";
-                                clicked => {
-                                    root.open-profile(root.npub);
-                                }
-                            }
-
-                            Button {
-                                text: root.nsec == "" ? "Reveal nsec" : "Hide nsec";
-                                clicked => {
-                                    root.reveal-nsec();
-                                }
-                            }
-                        }
-
-                        if root.nsec != "": LineEdit {
-                            text: root.nsec;
-                            read-only: true;
-                        }
-
-                        Title {
-                            text: "Relays";
-                        }
-
-                        for relay in root.relays: HorizontalLayout {
-                            spacing: 8px;
-                            Switch {
-                                checked: relay.enabled;
-                                toggled => {
-                                    root.toggle-relay(relay.url, self.checked);
-                                }
-                            }
-
-                            Text {
-                                text: relay.url;
-                                vertical-alignment: center;
-                                overflow: elide;
-                                horizontal-stretch: 1;
-                            }
-
-                            Button {
-                                text: "×";
-                                clicked => {
-                                    root.remove-relay(relay.url);
-                                }
-                            }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 8px;
-                            new-relay := LineEdit {
-                                placeholder-text: "wss://…";
-                            }
-
-                            Button {
-                                text: "Add";
-                                clicked => {
-                                    root.add-relay(new-relay.text);
-                                    new-relay.text = "";
-                                }
-                            }
-                        }
-
-                        // out of the way, as it replaces who we are
-                        Text {
-                            text: (root.show-reset-identity ? "▾" : "▸") + " Reset identity";
-                            color: #c62828;
-                            font-weight: 700;
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.show-reset-identity = !root.show-reset-identity;
-                                }
-                            }
-                        }
-
-                        if root.show-reset-identity: VerticalLayout {
-                            spacing: 8px;
-                            Muted {
-                                text: "Switch to another key you used before. This one stops being yours here: its trade reports stay with it. Save its nsec first if you may want it back. Only possible with no open offers or ongoing trades.";
-                            }
-
-                            HorizontalLayout {
-                                spacing: 8px;
-                                import-field := LineEdit {
-                                    placeholder-text: "nsec1…";
-                                    input-type: password;
-                                }
-
-                                Button {
-                                    text: "Import";
-                                    enabled: import-field.text != "";
-                                    clicked => {
-                                        root.import-nsec(import-field.text);
-                                        import-field.text = "";
-                                    }
-                                }
-                            }
-                        }
+                if root.page == 6: SettingsPage {
+                    npub: root.npub;
+                    nsec: root.nsec;
+                    relays: root.relays;
+                    show-reset-identity <=> root.show-reset-identity;
+                    toggle-relay(url, enabled) => {
+                        root.toggle-relay(url, enabled);
+                    }
+                    remove-relay(url) => {
+                        root.remove-relay(url);
+                    }
+                    add-relay(url) => {
+                        root.add-relay(url);
+                    }
+                    reveal-nsec => {
+                        root.reveal-nsec();
+                    }
+                    open-profile(npub) => {
+                        root.open-profile(npub);
+                    }
+                    import-nsec(nsec) => {
+                        root.import-nsec(nsec);
                     }
                 }
             }

@@ -226,7 +226,8 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     currencies.extend(prices::currency_codes().into_iter().map(SharedString::from));
     ui.set_create_currencies(ModelRc::new(VecModel::from(currencies[1..].to_vec())));
     ui.set_currencies(ModelRc::new(VecModel::from(currencies)));
-    // the combobox drops a value that isn't in its model yet, so set it again now that it is
+    // `currencies` already defaults to ["all"] in the .slint so the filter's initial "all"
+    // is in the model from the start (see slint-ui/slint#11970). keep it set here too.
     ui.set_filter_currency("all".into());
 
     app.reset_create_form(ui);
@@ -2738,16 +2739,6 @@ fn deal_view(
 
     let mut view = DealView {
         active: true,
-        role: format!(
-            "you are {} bitcoin. {} took the offer, so {} send first.",
-            if i_get_bitcoin { "buying" } else { "selling" },
-            if me == Role::Taker { "you" } else { "they" },
-            who(Role::Taker),
-        )
-        .into(),
-        next_step: deal.next_step(terms).into(),
-        my_turn: deal.pending().first().is_some_and(|s| s.who(terms) == me),
-        concluded: deal.concluded(),
         price_warning: price_warning.into(),
         rows: ModelRc::new(VecModel::from(rows)),
         amount_hint: amount_range(terms.amount_min, terms.amount_max, cur).into(),

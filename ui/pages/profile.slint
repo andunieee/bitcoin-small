@@ -1,0 +1,204 @@
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { ReportItem } from "../models.slint";
+import { Card, Title, Muted, Identity, Button } from "../widgets.slint";
+
+export component ProfilePage inherits ScrollView {
+    in property <string> profile-npub;
+    in property <string> profile-name;
+    in property <color> profile-color;
+    in property <string> profile-label;
+    in property <bool> profile-blocked;
+    in property <bool> profile-is-me;
+    in property <[ReportItem]> own-reports;
+    in property <[ReportItem]> others-reports;
+    in property <string> others-note;
+    callback open-trade(string);
+    callback report-trade(bool, string);
+    callback set-blocked(bool);
+    callback set-label(string);
+
+    content-width: self.visible-width;
+
+    VerticalLayout {
+        width: root.visible-width;
+        padding: 16px;
+        spacing: 10px;
+        alignment: start;
+        if root.profile-is-me: Title {
+            text: "You";
+        }
+        if !root.profile-is-me: Identity {
+            text: root.profile-name;
+            tint: root.profile-color;
+            font-size: 20px;
+        }
+
+        LineEdit {
+            text: root.profile-npub;
+            read-only: true;
+        }
+
+        if !root.profile-is-me: HorizontalLayout {
+            spacing: 8px;
+            label-input := LineEdit {
+                text: root.profile-label;
+                placeholder-text: "label, only you see it";
+                accepted => {
+                    root.set-label(self.text);
+                }
+            }
+
+            Button {
+                text: "Save";
+                enabled: label-input.text != root.profile-label;
+                clicked => {
+                    root.set-label(label-input.text);
+                }
+            }
+        }
+
+        if !root.profile-is-me: HorizontalLayout {
+            spacing: 8px;
+            Button {
+                text: "Message";
+                enabled: !root.profile-blocked;
+                clicked => {
+                    root.open-trade(root.profile-npub);
+                }
+            }
+
+            Button {
+                text: root.profile-blocked ? "Unblock" : "Block";
+                clicked => {
+                    root.set-blocked(!root.profile-blocked);
+                }
+            }
+        }
+
+        Text {
+            text: root.profile-is-me ? "Your trade reports" : "Our history with them";
+            font-weight: 700;
+        }
+
+        if root.own-reports.length == 0: Muted {
+            text: "you have never traded with them.";
+        }
+        for rep in root.own-reports: Card {
+            HorizontalLayout {
+                padding: 8px;
+                spacing: 8px;
+                Text {
+                    text: rep.success ? "✓" : "✗";
+                    color: rep.success ? #2e7d32 : #c62828;
+                    font-weight: 700;
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    if rep.subject-name != "": HorizontalLayout {
+                        spacing: 4px;
+                        Muted {
+                            text: "with";
+                            vertical-alignment: center;
+                        }
+
+                        Identity {
+                            text: rep.subject-name;
+                            tint: rep.subject-color;
+                            font-size: 12px;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    Text {
+                        text: rep.comment != "" ? rep.comment : (rep.success ? "successful trade" : "failed trade");
+                        wrap: word-wrap;
+                    }
+                }
+
+                Muted {
+                    text: rep.time;
+                }
+            }
+        }
+
+        if !root.profile-is-me: Text {
+            text: "What the people we trust say";
+            font-weight: 700;
+        }
+
+        if !root.profile-is-me: Muted {
+            text: root.others-note;
+        }
+
+        for rep in root.others-reports: Card {
+            HorizontalLayout {
+                padding: 8px;
+                spacing: 8px;
+                Text {
+                    text: rep.success ? "✓" : "✗";
+                    color: rep.success ? #2e7d32 : #c62828;
+                    font-weight: 700;
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    Text {
+                        text: rep.comment != "" ? rep.comment : (rep.success ? "successful trade" : "failed trade");
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Muted {
+                            text: "by";
+                            vertical-alignment: center;
+                        }
+
+                        Identity {
+                            text: rep.author-name;
+                            tint: rep.author-color;
+                            font-size: 12px;
+                        }
+
+                        Muted {
+                            text: "· " + rep.time;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if !root.profile-is-me: VerticalLayout {
+            spacing: 8px;
+            Text {
+                text: "Report a finished trade";
+                font-weight: 700;
+            }
+
+            comment := LineEdit {
+                placeholder-text: "optional comment, e.g. \"$5 via PIX, fast\"";
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                Button {
+                    text: "✓ Success";
+                    clicked => {
+                        root.report-trade(true, comment.text);
+                        comment.text = "";
+                    }
+                }
+
+                Button {
+                    text: "✗ Failure";
+                    clicked => {
+                        root.report-trade(false, comment.text);
+                        comment.text = "";
+                    }
+                }
+            }
+        }
+    }
+}

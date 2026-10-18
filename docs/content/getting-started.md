@@ -39,6 +39,17 @@ well-known ones.
 Some relays are paid: they only accept posts from keys that paid them a fee. That makes a new identity cost
 something, which matters for trust. See [Trading safely](../safety/).
 
+## Practice with XFK
+
+Until you have traded for real, the market opens on **XFK**, a pretend currency. Its traders are bots that run inside
+the app, on a relay that only exists on your device, so nothing you do there reaches anyone, and no money or bitcoin
+moves. A pretend seller and a pretend buyer always have an offer up, for 1 to 50 XFK, and a pretend taker takes any
+XFK offer you make. They go through every step of a trade with you, so you can see how one goes before it counts. An
+XFK is always worth 1,000 sats.
+
+Trade reports about the bots stay in the practice market too, and never count towards who you trust. Pick another
+currency in the market or in the new offer form whenever you are ready.
+
 ## Next
 
 Read [Trading safely](../safety/) before your first trade. Then [take an offer](../taking-offers/) or

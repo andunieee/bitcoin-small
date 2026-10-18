@@ -27,6 +27,10 @@ export component MarketPage inherits VerticalLayout {
         }
     }
 
+    if root.filter-currency == "XFK": Tip {
+        text: "XFK is pretend money, for practice: these traders are bots on this device, and nothing you send them is real. Take an offer, or make one of your own and a bot will take it.";
+    }
+
     HorizontalLayout {
         spacing: 8px;
         ComboBox {

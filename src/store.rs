@@ -5,6 +5,7 @@
 //! browser. the redb databases live on disk, or in the browser's origin private file system.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use ritualistic::database::EventDatabase;
 use ritualistic::{Event, Filter, PubKey, RedbEventDatabase, SecretKey, TagQuery};
@@ -82,15 +83,16 @@ impl Files for LocalStorage {
     }
 }
 
-pub fn load_or_create_key(files: &dyn Files) -> SecretKey {
-    if let Some(hex) = files.read("key")
+/// our key is in "key". the bots of the practice market (see `xfk.rs`) keep theirs next to it.
+pub fn load_or_create_key(files: &dyn Files, name: &str) -> SecretKey {
+    if let Some(hex) = files.read(name)
         && let Ok(sk) = hex.trim().parse::<SecretKey>()
     {
         return sk;
     }
     let sk = SecretKey::generate();
-    if let Err(err) = files.write("key", &sk.to_hex()) {
-        log::error!("failed to save the key: {err}");
+    if let Err(err) = files.write(name, &sk.to_hex()) {
+        log::error!("failed to save the key {name}: {err}");
     }
     sk
 }
@@ -178,7 +180,7 @@ pub struct State {
 }
 
 pub struct Store {
-    pub files: Box<dyn Files>,
+    pub files: Arc<dyn Files>,
     pub state: State,
     pub db: RedbEventDatabase,
     pub history: History,
@@ -192,7 +194,7 @@ impl Store {
             .map_err(|e| e.to_string())
             .and_then(History::from_database)
             .expect("failed to open the trade history");
-        Self::new(Box::new(Dir(dir.to_path_buf())), db, history)
+        Self::new(Arc::new(Dir(dir.to_path_buf())), db, history)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -208,10 +210,10 @@ impl Store {
             Err(err) => Err(err.to_string()),
         }
         .expect("failed to open the trade history");
-        Self::new(Box::new(LocalStorage), db, history)
+        Self::new(Arc::new(LocalStorage), db, history)
     }
 
-    fn new(files: Box<dyn Files>, db: RedbEventDatabase, history: History) -> Self {
+    fn new(files: Arc<dyn Files>, db: RedbEventDatabase, history: History) -> Self {
         let state = files
             .read("state.json")
             .and_then(|s| serde_json::from_str::<State>(&s).ok())
@@ -371,7 +373,7 @@ mod tests {
         let day = 24 * 60 * 60;
         let me = SecretKey::generate();
         let mut store = Store::new(
-            Box::new(NoFiles),
+            Arc::new(NoFiles),
             RedbEventDatabase::from_database(memory()).unwrap(),
             History::from_database(memory()).unwrap(),
         );

@@ -10,6 +10,8 @@ pub enum PriceApi {
     Kraken,
     Bitstamp,
     Mempool,
+    /// the made-up price of the XFK practice market, see `xfk.rs`
+    Xfk,
 }
 
 pub const ALL_APIS: &[PriceApi] = &[
@@ -18,12 +20,15 @@ pub const ALL_APIS: &[PriceApi] = &[
     PriceApi::Kraken,
     PriceApi::Bitstamp,
     PriceApi::Mempool,
+    PriceApi::Xfk,
 ];
 
 /// (currency code, price apis that can quote btc in that currency)
 pub const CURRENCIES: &[(&str, &[PriceApi])] = {
     use PriceApi::*;
     &[
+        // first, as it is where newcomers start
+        ("XFK", &[Xfk]),
         ("USD", &[Coingecko, Yadio, Kraken, Bitstamp, Mempool]),
         ("EUR", &[Coingecko, Yadio, Kraken, Bitstamp, Mempool]),
         ("GBP", &[Coingecko, Yadio, Kraken, Bitstamp, Mempool]),
@@ -67,6 +72,7 @@ impl PriceApi {
             PriceApi::Kraken => "kraken",
             PriceApi::Bitstamp => "bitstamp",
             PriceApi::Mempool => "mempool",
+            PriceApi::Xfk => crate::xfk::PRICE_API,
         }
     }
 
@@ -84,6 +90,8 @@ impl PriceApi {
             PriceApi::Kraken => fetch_kraken(&upper).await,
             PriceApi::Bitstamp => fetch_bitstamp(&lower).await,
             PriceApi::Mempool => fetch_mempool(&upper).await,
+            PriceApi::Xfk if crate::xfk::is_xfk(currency) => Ok(crate::xfk::PRICE),
+            PriceApi::Xfk => Err(format!("{} only quotes XFK", crate::xfk::PRICE_API)),
         }
     }
 }

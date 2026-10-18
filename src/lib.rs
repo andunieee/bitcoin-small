@@ -1,11 +1,13 @@
 pub mod address;
 mod app;
 pub mod deal;
+pub mod xfk;
 pub mod form;
 pub mod history;
 mod notify;
 pub mod prices;
 pub mod protocol;
+pub mod relays;
 pub mod store;
 
 slint::include_modules!();

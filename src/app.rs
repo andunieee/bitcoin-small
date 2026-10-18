@@ -4,19 +4,18 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use ritualistic::{
-    Event, Filter, ID, Network, PubKey, PublishOptions, SecretKey, SubscriptionOptions, TagQuery,
-    Timestamp,
-};
+use ritualistic::{Event, Filter, ID, Network, PubKey, SecretKey, TagQuery, Timestamp};
 use tokio_with_wasm::alias as tokio;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::deal::{self, Action, Deal, OfferTerms, Role, Step};
+use crate::xfk;
 use crate::form::{self, OfferTemplate};
 use crate::history::{Outcome, PastTrade};
 use crate::prices::{self, PriceApi, fiat, thousands};
 use crate::protocol::*;
+use crate::relays::{MemoryRelay, Occurrence, Relays, Router};
 use crate::store::{
     DEFAULT_WRITE_RELAYS, Delivery, ENOUGH_OWN_REPORTS, Message, MyOffer, Store,
     TRUSTED_PEERS_TO_ASK, Trade,
@@ -91,7 +90,11 @@ enum Report {
 struct App {
     /// our key and its pubkey. it only changes when an nsec is imported
     identity: RwLock<(SecretKey, PubKey)>,
-    net: Network,
+    /// the real relays, and the one of the XFK practice market
+    net: Arc<dyn Relays>,
+    xfk_relay: Arc<MemoryRelay>,
+    /// the bots of the practice market
+    xfk_people: Vec<PubKey>,
     ui: slint::Weak<AppWindow>,
     store: Mutex<Store>,
 
@@ -111,6 +114,12 @@ struct App {
     filters: Mutex<(String, String)>,
 
     ping_sub: Mutex<Option<LiveSub>>,
+    /// whether we had yet to trade for real when the app started: no trade recorded, ongoing or
+    /// past, other than in the practice market. then the market and the new offer form start
+    /// with XFK.
+    practicing: bool,
+    /// the practice market is on this device, so its offers show up as they are made
+    practice_sub: Mutex<Option<LiveSub>>,
     /// peer hex -> subscription to the conversation pubkey
     dm_subs: Mutex<HashMap<String, LiveSub>>,
 
@@ -158,7 +167,10 @@ pub async fn run() -> Result<(), slint::PlatformError> {
 fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
     let (ui, app) = build(store, false)?;
 
+    let files = app.store.lock().unwrap().files.clone();
+    xfk::start(app.xfk_relay.clone(), files);
     app.restart_ping_sub();
+    app.watch_practice_market();
     let peers: Vec<String> = app
         .store
         .lock()
@@ -188,12 +200,27 @@ fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
 
 /// the window and the app behind it, before anything goes to the network
 fn build(store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::PlatformError> {
-    let sk = crate::store::load_or_create_key(&*store.files);
+    let sk = crate::store::load_or_create_key(&*store.files, "key");
     let ui = AppWindow::new()?;
+    // the screenshots have nothing to keep
+    let xfk_relay = Arc::new(MemoryRelay::new(
+        xfk::RELAY,
+        (!offline).then(|| store.files.clone()),
+    ));
+    let xfk_people = xfk::people(&*store.files);
+    let practicing = !store.state.trades.values().any(|t| real_trade(t.offer.as_ref()))
+        && !store.history.any(|t| real_trade(t.offer.as_ref()));
+    // the market starts where we last traded, or in the practice market when we never did
+    let market_currency = last_trade_currency(&store).unwrap_or_else(|| xfk::XFK.into());
 
     let app = Arc::new(App {
         identity: RwLock::new((sk.clone(), sk.pubkey())),
-        net: Network::new(),
+        net: Arc::new(Router {
+            net: Network::new(),
+            memory: xfk_relay.clone(),
+        }),
+        xfk_relay,
+        xfk_people,
         ui: ui.as_weak(),
         store: Mutex::new(store),
         offers: Mutex::new(vec![]),
@@ -203,8 +230,10 @@ fn build(store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::Pl
         price_errors: Mutex::new(HashMap::new()),
         form_pair: Mutex::new(Default::default()),
         locale_currency: form::locale_currency(),
-        filters: Mutex::new(("all".into(), "all".into())),
+        filters: Mutex::new(("all".into(), market_currency)),
         ping_sub: Mutex::new(None),
+        practicing,
+        practice_sub: Mutex::new(None),
         dm_subs: Mutex::new(HashMap::new()),
         current_trade: Mutex::new(None),
         current_profile: Mutex::new(None),
@@ -228,7 +257,7 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     ui.set_currencies(ModelRc::new(VecModel::from(currencies)));
     // `currencies` already defaults to ["all"] in the .slint so the filter's initial "all"
     // is in the model from the start (see slint-ui/slint#11970). keep it set here too.
-    ui.set_filter_currency("all".into());
+    ui.set_filter_currency(app.filters.lock().unwrap().1.clone().into());
 
     app.reset_create_form(ui);
     app.render_relays();
@@ -664,7 +693,7 @@ impl App {
                 // and we don't want to replace one we couldn't see
                 let mut reachable = false;
                 for url in &indexers {
-                    if self.net.ensure_relay(url).await.is_ok() {
+                    if self.net.reachable(url).await.unwrap_or(false) {
                         reachable = true;
                         break;
                     }
@@ -731,16 +760,13 @@ impl App {
         if relays.is_empty() || self.offline {
             return events;
         }
-        let mut sub = self
-            .net
-            .subscribe(&relays, filter, SubscriptionOptions::default())
-            .await;
+        let mut sub = self.net.subscribe(&relays, filter);
         let deadline = tokio::time::sleep(FETCH_TIMEOUT);
         tokio::pin!(deadline);
         loop {
             tokio::select! {
                 occ = sub.recv() => match occ {
-                    Some(ritualistic::Occurrence::Event(evt, _)) => events.push(*evt),
+                    Some(Occurrence::Event(evt)) => events.push(evt),
                     _ => break,
                 },
                 _ = &mut deadline => break,
@@ -760,8 +786,8 @@ impl App {
         if self.offline {
             return vec![];
         }
-        // publish_many skips invalid urls without a word, so catch them here, and use the same
-        // normalized urls it reports back with
+        // invalid urls are skipped without a word, so catch them here, and use the same
+        // normalized urls the answers come back with
         let mut urls = vec![];
         let mut answers: Vec<Delivery> = vec![];
         for relay in relays {
@@ -775,25 +801,17 @@ impl App {
         }
         on_answer(&answers);
 
-        let mut results = self
-            .net
-            .clone()
-            .publish_many(&urls, evt, PublishOptions::default())
-            .await;
-        while let Some(res) = results.recv().await {
-            let answer = match res.error {
-                None => Ok(()),
-                Some(err) => {
-                    log::warn!("publish to {} failed: {err}", res.relay_url);
-                    Err(err)
-                }
-            };
+        let mut results = self.net.publish(&urls, evt);
+        while let Some((relay_url, answer)) = results.recv().await {
+            if let Err(err) = &answer {
+                log::warn!("publish to {relay_url} failed: {err}");
+            }
             match answers
                 .iter_mut()
-                .find(|(url, a)| *url == res.relay_url && a.is_none())
+                .find(|(url, a)| *url == relay_url && a.is_none())
             {
                 Some(slot) => slot.1 = Some(answer),
-                None => answers.push((res.relay_url, Some(answer))),
+                None => answers.push((relay_url, Some(answer))),
             }
             on_answer(&answers);
         }
@@ -943,11 +961,12 @@ impl App {
     }
 
     /// keep a filter open on each relay, reconnecting forever, calling `on_event` once per event
+    /// with the relay it came from
     fn live(
         self: &Arc<Self>,
         relays: &[String],
         filter: Filter,
-        on_event: impl Fn(&Arc<App>, Event) + Send + Sync + 'static,
+        on_event: impl Fn(&Arc<App>, Event, &str) + Send + Sync + 'static,
     ) -> LiveSub {
         if self.offline {
             return LiveSub(vec![]);
@@ -961,15 +980,12 @@ impl App {
                 let (on_event, seen) = (on_event.clone(), seen.clone());
                 tokio::spawn(async move {
                     loop {
-                        let mut sub = app
-                            .net
-                            .subscribe([&url], filter.clone(), SubscriptionOptions::default())
-                            .await;
+                        let mut sub = app.net.subscribe(std::slice::from_ref(&url), filter.clone());
                         while let Some(occ) = sub.recv().await {
-                            if let ritualistic::Occurrence::Event(evt, _) = occ
+                            if let Occurrence::Event(evt) = occ
                                 && seen.lock().unwrap().insert(evt.id)
                             {
-                                on_event(&app, *evt);
+                                on_event(&app, evt, &url);
                             }
                         }
                         tokio::time::sleep(RECONNECT_DELAY).await;
@@ -983,9 +999,11 @@ impl App {
 
     fn relays_changed(self: &Arc<Self>) {
         let relays = self.app_relays().join(", ");
-        let _ = self
-            .ui
-            .upgrade_in_event_loop(move |ui| ui.set_create_publish_relays(relays.into()));
+        let _ = self.ui.upgrade_in_event_loop(move |ui| {
+            if !xfk::is_xfk(&ui.get_create_currency()) {
+                ui.set_create_publish_relays(relays.into());
+            }
+        });
         self.render_relays();
         self.restart_ping_sub();
         self.refresh_offers();
@@ -1043,7 +1061,16 @@ impl App {
                 )
                 .await;
 
-            let mut offers = app.offers_from(&events, since);
+            let mut offers = app.offers_from(&events, since, false);
+            // the practice market's are kept up to date as they come, see watch_practice_market
+            offers.extend(
+                app.offers
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|o| xfk::is_xfk(&o.currency) && o.expiration > now())
+                    .cloned(),
+            );
             // the trusted ones that arrived first stay
             for o in app.trusted_offers.lock().unwrap().iter() {
                 if !offers.iter().any(|x| x.id == o.id) {
@@ -1125,7 +1152,7 @@ impl App {
                 }
             }
             let found: Vec<Offer> = self
-                .offers_from(&events, since)
+                .offers_from(&events, since, false)
                 .into_iter()
                 .filter(|o| o.maker == pk)
                 .collect();
@@ -1153,8 +1180,54 @@ impl App {
         }
     }
 
-    /// the valid offers among `events`, leaving out blocked makers and our own closed offers
-    fn offers_from(&self, events: &[Event], since: Timestamp) -> Vec<Offer> {
+    /// follow the offers of the practice market, and their deletions, as they happen: the bots
+    /// put theirs up whenever they like, and a refresh is no fun for something this close
+    fn watch_practice_market(self: &Arc<Self>) {
+        let filter = Filter {
+            kinds: Some(vec![KIND_OFFER, KIND_DELETION]),
+            since: Some(Timestamp(now().0.saturating_sub(OFFER_TTL_SECS))),
+            ..Default::default()
+        };
+        let sub = self.live(&[xfk::RELAY.into()], filter, |app, evt, _| {
+            app.on_practice_event(evt)
+        });
+        *self.practice_sub.lock().unwrap() = Some(sub);
+    }
+
+    fn on_practice_event(self: &Arc<Self>, evt: Event) {
+        if evt.kind == KIND_DELETION {
+            let ids: Vec<String> = evt.tags.find_all("e").map(|t| t[1].clone()).collect();
+            let mut offers = self.offers.lock().unwrap();
+            let before = offers.len();
+            offers.retain(|o| o.maker != evt.pubkey || !ids.contains(&o.id.to_hex()));
+            if offers.len() == before {
+                return;
+            }
+        } else {
+            let since = Timestamp(now().0.saturating_sub(OFFER_TTL_SECS));
+            let Some(offer) = self.offers_from(&[evt], since, true).pop() else {
+                return;
+            };
+            let pair = (offer.currency.clone(), offer.price_api.clone());
+            {
+                let mut offers = self.offers.lock().unwrap();
+                if offers.iter().any(|o| o.id == offer.id) {
+                    return;
+                }
+                offers.push(offer);
+                offers.sort_by_key(|o| std::cmp::Reverse(o.created_at));
+            }
+            if !self.prices.lock().unwrap().contains_key(&pair) {
+                let app = self.clone();
+                tokio::spawn(async move { app.fetch_pairs(HashSet::from([pair])).await });
+            }
+        }
+        self.render_offers();
+    }
+
+    /// the valid offers among `events`, leaving out blocked makers and our own closed offers.
+    /// XFK offers only count from the practice relay (`practice`), and only they count from there.
+    fn offers_from(&self, events: &[Event], since: Timestamp, practice: bool) -> Vec<Offer> {
         // our own offers only show while we still have them open, a relay may have
         // ignored the deletion of one we closed
         let mine: HashSet<ID> = self.open_offers().iter().map(|o| o.id).collect();
@@ -1162,6 +1235,7 @@ impl App {
             .iter()
             .filter(|e| e.created_at >= since && e.verify_signature())
             .filter_map(Offer::from_event)
+            .filter(|o| xfk::is_xfk(&o.currency) == practice)
             .filter(|o| !self.is_blocked(&o.maker))
             .filter(|o| o.maker != self.me() || mine.contains(&o.id))
             .collect()
@@ -1279,7 +1353,11 @@ impl App {
             .unwrap()
             .iter()
             .filter(|o| side == "all" || o.side.as_str() == side)
-            .filter(|o| currency == "all" || currency.is_empty() || o.currency == currency)
+            // the practice market only shows on its own
+            .filter(|o| match currency.as_str() {
+                "all" | "" => !xfk::is_xfk(&o.currency),
+                _ => o.currency == currency,
+            })
             .map(|o| self.offer_item(o))
             .collect();
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
@@ -1293,7 +1371,13 @@ impl App {
     /// some free relays when we never made one
     fn reset_create_form(self: &Arc<Self>, ui: &AppWindow) {
         let recent = self.store.lock().unwrap().state.recent_offers.clone();
-        let d = form::defaults(&recent, &self.locale_currency);
+        // newcomers make their first offers in the practice market
+        let fallback = if self.practicing {
+            xfk::XFK
+        } else {
+            &self.locale_currency
+        };
+        let d = form::defaults(&recent, fallback);
         ui.set_create_relays(d.relays.join(", ").into());
         ui.set_create_publish_relays(self.app_relays().join(", ").into());
         ui.set_create_side(d.side.into());
@@ -1332,6 +1416,16 @@ impl App {
         ui.set_payment_options(checklist(&common, &checked));
         ui.set_payment_more(checklist(&more, &checked));
         ui.set_create_other_payments(others.join(", ").into());
+
+        // the practice market is on a relay of its own, the fields go back to normal after it
+        if xfk::is_xfk(currency) {
+            ui.set_create_relays(xfk::RELAY.into());
+            ui.set_create_publish_relays(xfk::RELAY.into());
+        } else if ui.get_create_relays() == xfk::RELAY {
+            let d = form::defaults(&recent, &self.locale_currency);
+            ui.set_create_relays(d.relays.join(", ").into());
+            ui.set_create_publish_relays(self.app_relays().join(", ").into());
+        }
 
         let (min, max) = match form::default_amount(&recent, currency) {
             Some((min, max)) => (prices::format_amount(min), prices::format_amount(max)),
@@ -1410,20 +1504,31 @@ impl App {
             self.status("pick at least one payment method");
             return;
         }
-        let relays: Vec<String> = split_list(&ui.get_create_relays())
-            .iter()
-            .filter_map(|r| ritualistic::normalize_url(r).ok())
-            .map(|u| u.to_string())
-            .collect();
+        let practice = xfk::is_xfk(&currency);
+        let relays: Vec<String> = if practice {
+            vec![xfk::RELAY.into()]
+        } else {
+            split_list(&ui.get_create_relays())
+                .iter()
+                .filter_map(|r| ritualistic::normalize_url(r).ok())
+                .map(|u| u.to_string())
+                .filter(|r| r != xfk::RELAY)
+                .collect()
+        };
         if relays.is_empty() {
             self.status("add at least one relay for the negotiation");
             return;
         }
-        let publish_to: Vec<String> = split_list(&ui.get_create_publish_relays())
-            .iter()
-            .filter_map(|r| ritualistic::normalize_url(r).ok())
-            .map(|u| u.to_string())
-            .collect();
+        let publish_to: Vec<String> = if practice {
+            vec![xfk::RELAY.into()]
+        } else {
+            split_list(&ui.get_create_publish_relays())
+                .iter()
+                .filter_map(|r| ritualistic::normalize_url(r).ok())
+                .map(|u| u.to_string())
+                .filter(|r| r != xfk::RELAY)
+                .collect()
+        };
         if publish_to.is_empty() {
             self.status("add at least one relay to publish the offer to");
             return;
@@ -1468,9 +1573,12 @@ impl App {
                 event: evt.clone(),
                 relays: vec![],
             });
-            let recent = &mut store.state.recent_offers;
-            recent.insert(0, template);
-            recent.truncate(form::RECENT_OFFERS);
+            // practice offers say nothing about how we trade for real
+            if !practice {
+                let recent = &mut store.state.recent_offers;
+                recent.insert(0, template);
+                recent.truncate(form::RECENT_OFFERS);
+            }
             let ping_relays = &mut store.state.ping_relays;
             for r in relays.into_iter().rev() {
                 ping_relays.retain(|x| x != &r);
@@ -1491,7 +1599,12 @@ impl App {
         let app = self.clone();
         tokio::spawn(async move {
             let id = evt.id;
-            let relays = merge_relays(&publish_to, &app.my_write_relays(true).await);
+            // a practice offer never makes it to our relay list, or anywhere real
+            let relays = if practice {
+                publish_to
+            } else {
+                merge_relays(&publish_to, &app.my_write_relays(true).await)
+            };
             let (ok, total) = app.publish("offer", relays, evt).await;
             app.status(format!("offer published to {}/{total} relays", ok.len()));
             let mut store = app.store.lock().unwrap();
@@ -1545,7 +1658,14 @@ impl App {
         self.render_offers();
         self.render_trades();
 
-        let relays = if mine.relays.is_empty() {
+        let practice = mine
+            .event
+            .tags
+            .find("currency")
+            .is_some_and(|t| xfk::is_xfk(&t[1]));
+        let relays = if practice {
+            vec![xfk::RELAY.into()]
+        } else if mine.relays.is_empty() {
             self.app_relays()
         } else {
             mine.relays
@@ -1577,12 +1697,13 @@ impl App {
             since: Some(now()),
             ..Default::default()
         };
-        let sub = self.live(&relays, filter, |app, evt| app.on_ping(evt));
+        let sub = self.live(&relays, filter, |app, evt, url| app.on_ping(evt, url));
         *self.ping_sub.lock().unwrap() = Some(sub);
     }
 
-    /// someone wants to trade with us: that starts a trade, unless there is one going on already
-    fn on_ping(self: &Arc<Self>, evt: Event) {
+    /// someone wants to trade with us: that starts a trade, unless there is one going on already.
+    /// `url` is the relay it came through.
+    fn on_ping(self: &Arc<Self>, evt: Event, url: &str) {
         let peer = evt.pubkey;
         if peer == self.me() || !evt.verify_signature() || self.is_blocked(&peer) {
             return;
@@ -1591,10 +1712,22 @@ impl App {
             let mut store = self.store.lock().unwrap();
             let is_new = !store.state.trades.contains_key(&peer.to_hex());
             if is_new {
-                let relays = if store.state.ping_relays.is_empty() {
-                    store.state.app_relays.clone()
+                // the practice market and the real one never mix
+                let relays = if url == xfk::RELAY {
+                    vec![xfk::RELAY.into()]
                 } else {
-                    store.state.ping_relays.clone()
+                    let ping_relays: Vec<String> = store
+                        .state
+                        .ping_relays
+                        .iter()
+                        .filter(|r| *r != xfk::RELAY)
+                        .cloned()
+                        .collect();
+                    if ping_relays.is_empty() {
+                        store.state.app_relays.clone()
+                    } else {
+                        ping_relays
+                    }
                 };
                 store.state.trades.insert(
                     peer.to_hex(),
@@ -1635,14 +1768,14 @@ impl App {
         if subs.contains_key(&hex) && !restart {
             return;
         }
-        let Some((relays, started_at)) = self
+        let Some((relays, started_at, slack)) = self
             .store
             .lock()
             .unwrap()
             .state
             .trades
             .get(&hex)
-            .map(|t| (t.relays.clone(), t.started_at))
+            .map(|t| (t.relays.clone(), t.started_at, start_slack(t)))
         else {
             return;
         };
@@ -1651,11 +1784,10 @@ impl App {
             kinds: Some(vec![KIND_DM]),
             authors: Some(vec![conv.pubkey()]),
             // dms stay on relays for a while, older ones belong to an earlier trade
-            since: (started_at > 0)
-                .then(|| Timestamp(started_at.saturating_sub(TRADE_START_SLACK))),
+            since: (started_at > 0).then(|| Timestamp(started_at.saturating_sub(slack))),
             ..Default::default()
         };
-        let sub = self.live(&relays, filter, move |app, evt| app.on_dm(&conv, evt));
+        let sub = self.live(&relays, filter, move |app, evt, _| app.on_dm(&conv, evt));
         subs.insert(hex, sub);
     }
 
@@ -1689,7 +1821,7 @@ impl App {
                 return;
             };
             if t.messages.iter().any(|m| m.id == rumor.id)
-                || rumor.created_at < t.started_at.saturating_sub(TRADE_START_SLACK)
+                || rumor.created_at < t.started_at.saturating_sub(start_slack(t))
             {
                 return;
             }
@@ -1775,7 +1907,11 @@ impl App {
                     started_by_me: true,
                     ..Default::default()
                 });
-            t.relays = offer.relays.clone();
+            t.relays = if xfk::is_xfk(&offer.currency) {
+                vec![xfk::RELAY.into()]
+            } else {
+                offer.relays.clone()
+            };
             t.offer_id = Some(offer.id.to_hex());
             t.offer_summary = offer_summary(&offer);
             t.offer = Some(OfferTerms::from_offer(&offer, false));
@@ -1824,8 +1960,13 @@ impl App {
             let mut store = self.store.lock().unwrap();
             let exists = store.state.trades.contains_key(&peer.to_hex());
             if !exists {
-                // talking to someone outside of an offer, use our own relays
-                let relays = store.state.app_relays.clone();
+                // talking to someone outside of an offer, use our own relays. the bots are only
+                // ever in the practice market.
+                let relays = if self.xfk_people.contains(&peer) {
+                    vec![xfk::RELAY.into()]
+                } else {
+                    store.state.app_relays.clone()
+                };
                 store.state.trades.insert(
                     peer.to_hex(),
                     Trade {
@@ -2229,7 +2370,7 @@ impl App {
             .iter()
             .map(|o| self.offer_item(o))
             .collect();
-        let (ongoing, past, made_offers) = {
+        let (ongoing, past, concluded) = {
             let store = self.store.lock().unwrap();
             let s = &store.state;
             let mut trades: Vec<_> = s.trades.iter().collect();
@@ -2282,9 +2423,14 @@ impl App {
                     })
                 })
                 .collect();
-            (ongoing, past, !s.recent_offers.is_empty())
+            // archived ones weren't concluded
+            let concluded = store
+                .history
+                .any(|t| t.outcome != Outcome::Archived && real_trade(t.offer.as_ref()));
+            (ongoing, past, concluded)
         };
-        let newcomer = !made_offers && open.is_empty() && ongoing.is_empty() && past.is_empty();
+        // the tip stays until a real trade went all the way, practice doesn't count
+        let newcomer = !concluded;
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
             ui.set_newcomer(newcomer);
             ui.set_my_offers(ModelRc::new(VecModel::from(open)));
@@ -2519,11 +2665,19 @@ impl App {
             return;
         }
         let evt = trade_report(&self.sk(), &peer, success, comment);
-        self.store.lock().unwrap().save_event(&evt);
+        // what we say about the bots stays in the practice market, and out of whom we trust
+        let practice = self.xfk_people.contains(&peer);
+        if !practice {
+            self.store.lock().unwrap().save_event(&evt);
+        }
 
         let app = self.clone();
         tokio::spawn(async move {
-            let relays = merge_relays(&app.app_relays(), &app.my_write_relays(false).await);
+            let relays = if practice {
+                vec![xfk::RELAY.into()]
+            } else {
+                merge_relays(&app.app_relays(), &app.my_write_relays(false).await)
+            };
             let (ok, total) = app.publish("trade report", relays, evt).await;
             app.status(format!(
                 "trade report published to {}/{total} relays",
@@ -2550,6 +2704,53 @@ fn report_item(labels: &BTreeMap<String, String>, e: &Event, show_subject: bool)
         success: e.kind == KIND_TRADE_SUCCESS,
         comment: e.content.clone().into(),
         time: ago(e.created_at).into(),
+    }
+}
+
+/// a trade about an offer in a real currency, not one of the practice market or a chat outside
+/// of an offer
+fn real_trade(terms: Option<&OfferTerms>) -> bool {
+    terms.is_some_and(|t| !xfk::is_xfk(&t.currency))
+}
+
+/// the currency of the trade we were last in: an ongoing one, by its last message, or one that
+/// is over, by when it ended. trades outside of an offer have none. "all" when the market can't
+/// filter by it.
+fn last_trade_currency(store: &Store) -> Option<String> {
+    let ongoing = store
+        .state
+        .trades
+        .values()
+        .filter(|t| t.offer.is_some())
+        .map(|t| {
+            let at = t.messages.last().map_or(t.started_at, |m| m.created_at);
+            (at, t.offer.as_ref())
+        })
+        .max_by_key(|(at, _)| *at);
+    let past = store
+        .history
+        .latest(|t| t.offer.is_some())
+        .map(|t| (t.ended_at, t.offer));
+    let currency = match (ongoing, past) {
+        (Some((at, terms)), Some((ended, _))) if at >= ended => terms?.currency.clone(),
+        (_, Some((_, terms))) => terms?.currency,
+        (Some((_, terms)), None) => terms?.currency.clone(),
+        (None, None) => return None,
+    };
+    if prices::currency_codes().contains(&currency.as_str()) {
+        Some(currency)
+    } else {
+        Some("all".into())
+    }
+}
+
+/// how far before a trade started its messages are still taken as part of it. none in the
+/// practice market, where everyone is on our clock, and a trade often follows another right away.
+fn start_slack(t: &Trade) -> u32 {
+    if !t.relays.is_empty() && t.relays.iter().all(|r| r == xfk::RELAY) {
+        0
+    } else {
+        TRADE_START_SLACK
     }
 }
 

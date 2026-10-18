@@ -125,6 +125,41 @@ impl History {
         })
     }
 
+    /// whether any past trade is like `f` says, stopping at the first one
+    pub fn any(&self, f: impl Fn(&PastTrade) -> bool) -> bool {
+        let Ok(txn) = self.db.begin_read() else {
+            return false;
+        };
+        let Ok(trades) = txn.open_table(TRADES) else {
+            return false;
+        };
+        let Ok(iter) = trades.iter() else {
+            return false;
+        };
+        iter.flatten()
+            .any(|(id, json)| past_trade(id.value(), json.value()).is_some_and(|t| f(&t)))
+    }
+
+    /// the most recently ended trade that is like `f` says
+    pub fn latest(&self, f: impl Fn(&PastTrade) -> bool) -> Option<PastTrade> {
+        let txn = self.db.begin_read().ok()?;
+        let trades = txn.open_table(TRADES).ok()?;
+        let by_end = txn.open_table(BY_END).ok()?;
+        for entry in by_end.iter().ok()?.rev().flatten() {
+            let (_, id) = entry.0.value();
+            if let Some(t) = trades
+                .get(id)
+                .ok()
+                .flatten()
+                .and_then(|json| past_trade(id, json.value()))
+                && f(&t)
+            {
+                return Some(t);
+            }
+        }
+        None
+    }
+
     pub fn get(&self, id: i64) -> Option<PastTrade> {
         let txn = self.db.begin_read().ok()?;
         let json = txn.open_table(TRADES).ok()?.get(id as u64).ok()??;

@@ -65,6 +65,10 @@ ndk-context = "0.1"
 env_logger = "0.11"
 notify-rust = "4"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# paused time, for the bots of the practice market
+tokio = { version = "1", features = ["test-util"] }
+
 [build-dependencies]
 slint-build = "1.17"
 

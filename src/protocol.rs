@@ -44,6 +44,7 @@ pub const DEFAULT_BITCOIN_METHODS: &[&str] = &["on-chain", "lightning", "arkade"
 /// the new offer form shows the ones for the chosen currency first and hides the rest.
 pub const PAYMENT_METHODS: &[(&str, &[&str])] = &[
     ("Bank transfer", &["*"]),
+    ("Play money", &["XFK"]),
     ("Cash F2F", &["*"]),
     (
         "Revolut",

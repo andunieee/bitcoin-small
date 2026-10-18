@@ -505,6 +505,8 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
     s.trades.insert(
         lucas.pubkey().to_hex(),
         Trade {
+            peer: lucas.pubkey().to_hex(),
+            trade_id: "demo".into(),
             relays: featured.relays.clone(),
             offer_summary: offer_summary(&featured),
             offer_id: Some(featured.id.to_hex()),
@@ -531,6 +533,8 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
     s.trades.insert(
         kofi.pubkey().to_hex(),
         Trade {
+            peer: kofi.pubkey().to_hex(),
+            trade_id: "demo".into(),
             relays: mine.relays.clone(),
             offer_summary: offer_summary(&mine),
             offer_id: Some(mine.id.to_hex()),

@@ -60,7 +60,7 @@ impl Drop for LiveSub {
 /// the trade shown in the trade view
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TradeRef {
-    /// keyed by the peer, in the json state
+    /// keyed by the pubkey of its conversation, in the json state
     Ongoing(PubKey),
     /// keyed by its row in the history database
     Past(i64),
@@ -171,7 +171,8 @@ fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
     xfk::start(app.xfk_relay.clone(), files);
     app.restart_ping_sub();
     app.watch_practice_market();
-    let peers: Vec<String> = app
+    app.rekey_legacy_trades();
+    let keys: Vec<String> = app
         .store
         .lock()
         .unwrap()
@@ -180,8 +181,8 @@ fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
         .keys()
         .cloned()
         .collect();
-    for peer in peers {
-        if let Ok(pk) = peer.parse() {
+    for key in keys {
+        if let Ok(pk) = key.parse() {
             app.ensure_dm_sub(pk, false);
         }
     }
@@ -338,7 +339,12 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     let a = app.clone();
     ui.on_open_trade(move |peer| {
         if let Ok(pk) = peer.parse::<PubKey>() {
-            a.open_trade(pk);
+            // the trades tab passes the key of a trade, a profile the key of a person
+            if a.store.lock().unwrap().state.trades.contains_key(&pk.to_hex()) {
+                a.show_trade(TradeRef::Ongoing(pk));
+            } else {
+                a.open_trade(pk);
+            }
         }
     });
 
@@ -1751,9 +1757,11 @@ impl App {
         if peer == self.me() || !evt.verify_signature() || self.is_blocked(&peer) {
             return;
         }
+        let trade_id = ping_trade_id(&evt);
+        let key = Conversation::new(&self.sk(), peer, &trade_id).pubkey();
         let is_new = {
             let mut store = self.store.lock().unwrap();
-            let is_new = !store.state.trades.contains_key(&peer.to_hex());
+            let is_new = !store.state.trades.contains_key(&key.to_hex());
             if is_new {
                 // the practice market and the real one never mix
                 let relays = if url == xfk::RELAY {
@@ -1773,8 +1781,10 @@ impl App {
                     }
                 };
                 store.state.trades.insert(
-                    peer.to_hex(),
+                    key.to_hex(),
                     Trade {
+                        peer: peer.to_hex(),
+                        trade_id,
                         relays,
                         offer_summary: "pinged you about your offer".into(),
                         started_at: evt.created_at.0,
@@ -1786,12 +1796,12 @@ impl App {
             }
             is_new
         };
-        self.ensure_dm_sub(peer, false);
+        self.ensure_dm_sub(key, false);
         if is_new {
             let name = self.name(&peer);
             self.status(format!("new trade with {name}"));
             self.notify(
-                &peer,
+                &key,
                 format!("{name} wants to trade"),
                 "they contacted you, likely about one of your offers".into(),
                 true,
@@ -1802,27 +1812,36 @@ impl App {
 
     /// subscribe to `authors:[conversation pubkey]`, which is all it takes to hear from a peer.
     /// blocking someone is just never doing this for them. only ongoing trades are listened to.
-    fn ensure_dm_sub(self: &Arc<Self>, peer: PubKey, restart: bool) {
-        if self.is_blocked(&peer) {
-            return;
-        }
-        let hex = peer.to_hex();
+    /// `key` is the conversation pubkey of the trade.
+    fn ensure_dm_sub(self: &Arc<Self>, key: PubKey, restart: bool) {
+        let hex = key.to_hex();
         let mut subs = self.dm_subs.lock().unwrap();
         if subs.contains_key(&hex) && !restart {
             return;
         }
-        let Some((relays, started_at, slack)) = self
+        let Some((peer, trade_id, relays, started_at, slack)) = self
             .store
             .lock()
             .unwrap()
             .state
             .trades
             .get(&hex)
-            .map(|t| (t.relays.clone(), t.started_at, start_slack(t)))
+            .and_then(|t| {
+                Some((
+                    t.peer.parse::<PubKey>().ok()?,
+                    t.trade_id.clone(),
+                    t.relays.clone(),
+                    t.started_at,
+                    start_slack(t),
+                ))
+            })
         else {
             return;
         };
-        let conv = Conversation::new(&self.sk(), peer);
+        if self.is_blocked(&peer) {
+            return;
+        }
+        let conv = Conversation::new(&self.sk(), peer, &trade_id);
         let filter = Filter {
             kinds: Some(vec![KIND_DM]),
             authors: Some(vec![conv.pubkey()]),
@@ -1860,7 +1879,7 @@ impl App {
                         .find(|o| o.event.id.to_hex() == t[1])
                 })
                 .and_then(|o| Offer::from_event(&o.event));
-            let Some(t) = store.state.trades.get_mut(&conv.peer.to_hex()) else {
+            let Some(t) = store.state.trades.get_mut(&conv.pubkey().to_hex()) else {
                 return;
             };
             if t.messages.iter().any(|m| m.id == rumor.id)
@@ -1903,9 +1922,9 @@ impl App {
         };
         let name = self.name(&conv.peer);
         if new_pair.is_some() {
-            self.notify(&conv.peer, format!("{name} took your offer"), shown.1, true);
+            self.notify(&conv.pubkey(), format!("{name} took your offer"), shown.1, true);
         } else if let Some(text) = shown.0 {
-            self.notify(&conv.peer, name, text, false);
+            self.notify(&conv.pubkey(), name, text, false);
         }
         // we need the price of an offer to quote it to its taker
         if let Some(pair) = new_pair.filter(|p| !self.prices.lock().unwrap().contains_key(p)) {
@@ -1914,7 +1933,7 @@ impl App {
         }
         self.settle_prices();
         self.render_trades();
-        if *self.current_trade.lock().unwrap() == Some(TradeRef::Ongoing(conv.peer)) {
+        if *self.current_trade.lock().unwrap() == Some(TradeRef::Ongoing(conv.pubkey())) {
             self.render_trade();
         } else {
             self.status(format!("new message from {}", self.name(&conv.peer)));
@@ -1939,17 +1958,39 @@ impl App {
             self.status("you blocked this maker");
             return;
         }
-        {
+        let key = {
             let mut store = self.store.lock().unwrap();
+            // taking the same offer again while that trade goes on is the same trade
+            let existing = store
+                .state
+                .trades
+                .iter()
+                .find(|(_, t)| {
+                    t.started_by_me
+                        && t.peer == offer.maker.to_hex()
+                        && t.offer_id.as_deref() == Some(offer.id.to_hex().as_str())
+                })
+                .and_then(|(k, _)| k.parse::<PubKey>().ok());
+            let key = existing.unwrap_or_else(|| {
+                let trade_id = new_trade_id();
+                let key = Conversation::new(&self.sk(), offer.maker, &trade_id).pubkey();
+                store.state.trades.insert(
+                    key.to_hex(),
+                    Trade {
+                        peer: offer.maker.to_hex(),
+                        trade_id,
+                        started_at: now().0,
+                        started_by_me: true,
+                        ..Default::default()
+                    },
+                );
+                key
+            });
             let t = store
                 .state
                 .trades
-                .entry(offer.maker.to_hex())
-                .or_insert_with(|| Trade {
-                    started_at: now().0,
-                    started_by_me: true,
-                    ..Default::default()
-                });
+                .get_mut(&key.to_hex())
+                .expect("just inserted or found");
             t.relays = if xfk::is_xfk(&offer.currency) {
                 vec![xfk::RELAY.into()]
             } else {
@@ -1959,50 +2000,103 @@ impl App {
             t.offer_summary = offer_summary(&offer);
             t.offer = Some(OfferTerms::from_offer(&offer, false));
             store.persist();
-        }
-        self.ensure_dm_sub(offer.maker, true);
-        self.send_ping(offer.maker);
+            key
+        };
+        self.ensure_dm_sub(key, true);
+        self.send_ping(key);
         // to hear back from them
         crate::notify::request_permission();
         // there is nothing to pick about a fixed amount, but the maker answers it with the price
         let terms = OfferTerms::from_offer(&offer, false);
         if terms.fixed_amount() {
-            self.send_action_to(offer.maker, Action::Amount(offer.amount_min), true);
+            self.send_action_to(key, Action::Amount(offer.amount_min), true);
         }
         self.render_trades();
-        self.open_trade(offer.maker);
+        self.show_trade(TradeRef::Ongoing(key));
     }
 
-    fn send_ping(self: &Arc<Self>, peer: PubKey) {
-        let Some(relays) = self.trade_relays(&peer) else {
+    /// ping the other side of the trade `key`, which tells them how to find its conversation
+    fn send_ping(self: &Arc<Self>, key: PubKey) {
+        let Some((peer, trade_id, relays)) = self
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .trades
+            .get(&key.to_hex())
+            .and_then(|t| Some((t.peer.parse::<PubKey>().ok()?, t.trade_id.clone(), t.relays.clone())))
+        else {
             return;
         };
-        let evt = ping(&self.sk(), &peer);
+        let evt = ping(&self.sk(), &peer, &trade_id);
         let app = self.clone();
         tokio::spawn(async move {
             app.publish("ping", relays, evt).await;
         });
     }
 
-    fn trade_relays(&self, peer: &PubKey) -> Option<Vec<String>> {
+    /// the conversation pubkey of the most recent ongoing trade with `peer`
+    fn latest_trade_with(&self, peer: &PubKey) -> Option<PubKey> {
+        let store = self.store.lock().unwrap();
+        let hex = peer.to_hex();
+        store
+            .state
+            .trades
+            .iter()
+            .filter(|(_, t)| t.peer == hex)
+            .max_by_key(|(_, t)| t.messages.last().map_or(t.started_at, |m| m.created_at))
+            .and_then(|(k, _)| k.parse().ok())
+    }
+
+    /// the conversation pubkeys of all the ongoing trades with `peer`
+    fn trades_with(&self, peer: &PubKey) -> Vec<PubKey> {
+        let hex = peer.to_hex();
         self.store
             .lock()
             .unwrap()
             .state
             .trades
-            .get(&peer.to_hex())
-            .map(|t| t.relays.clone())
+            .iter()
+            .filter(|(_, t)| t.peer == hex)
+            .filter_map(|(k, _)| k.parse().ok())
+            .collect()
     }
 
-    /// open the ongoing trade with someone, starting one if there is none
+    /// trades from before each had its own conversation were keyed by their peer
+    fn rekey_legacy_trades(&self) {
+        let sk = self.sk();
+        let mut store = self.store.lock().unwrap();
+        let legacy: Vec<String> = store
+            .state
+            .trades
+            .iter()
+            .filter(|(_, t)| t.peer.is_empty())
+            .map(|(k, _)| k.clone())
+            .collect();
+        if legacy.is_empty() {
+            return;
+        }
+        for hex in legacy {
+            let (Some(mut t), Ok(peer)) = (store.state.trades.remove(&hex), hex.parse::<PubKey>())
+            else {
+                continue;
+            };
+            t.peer = hex;
+            let key = Conversation::new(&sk, peer, "").pubkey();
+            store.state.trades.insert(key.to_hex(), t);
+        }
+        store.persist();
+    }
+
+    /// open the ongoing trade with someone, starting a direct chat if there is none
     fn open_trade(self: &Arc<Self>, peer: PubKey) {
         if peer == self.me() {
             return;
         }
-        let created = {
-            let mut store = self.store.lock().unwrap();
-            let exists = store.state.trades.contains_key(&peer.to_hex());
-            if !exists {
+        let (key, created) = match self.latest_trade_with(&peer) {
+            Some(key) => (key, false),
+            None => {
+                let mut store = self.store.lock().unwrap();
                 // talking to someone outside of an offer, use our own relays. the bots are only
                 // ever in the practice market.
                 let relays = if self.xfk_people.contains(&peer) {
@@ -2010,9 +2104,13 @@ impl App {
                 } else {
                     store.state.app_relays.clone()
                 };
+                let trade_id = new_trade_id();
+                let key = Conversation::new(&self.sk(), peer, &trade_id).pubkey();
                 store.state.trades.insert(
-                    peer.to_hex(),
+                    key.to_hex(),
                     Trade {
+                        peer: peer.to_hex(),
+                        trade_id,
                         relays,
                         // the peer's name stands within the header line, so say it as a detail
                         offer_summary: "· direct chat".into(),
@@ -2022,15 +2120,15 @@ impl App {
                     },
                 );
                 store.persist();
+                (key, true)
             }
-            !exists
         };
         if created {
-            self.ensure_dm_sub(peer, false);
-            self.send_ping(peer);
+            self.ensure_dm_sub(key, false);
+            self.send_ping(key);
             self.render_trades();
         }
-        self.show_trade(TradeRef::Ongoing(peer));
+        self.show_trade(TradeRef::Ongoing(key));
     }
 
     fn show_trade(self: &Arc<Self>, which: TradeRef) {
@@ -2064,6 +2162,7 @@ impl App {
                 let Some(t) = store.state.trades.get(&peer.to_hex()) else {
                     return;
                 };
+                let peer = t.peer.parse().unwrap_or(peer);
                 let view = TradeView {
                     ongoing: true,
                     // stored summaries may pre-date the "maker " word being shown inline, drop it
@@ -2234,28 +2333,28 @@ impl App {
     /// the offer's source, once, when it arrives (or when that price does).
     fn settle_prices(self: &Arc<Self>) {
         let _quoting = self.quoting.lock().unwrap();
-        let trades: Vec<(PubKey, OfferTerms, Deal, Option<f64>)> = {
+        let trades: Vec<(PubKey, PubKey, OfferTerms, Deal, Option<f64>)> = {
             let store = self.store.lock().unwrap();
             store
                 .state
                 .trades
                 .iter()
-                .filter(|(hex, _)| !store.state.blocked.contains(*hex))
+                .filter(|(_, t)| !store.state.blocked.contains(&t.peer))
                 .filter_map(|(hex, t)| {
                     let terms = t.offer.clone()?;
                     let deal = Deal::replay(&terms, &t.messages);
-                    Some((hex.parse().ok()?, terms, deal, t.price_check))
+                    Some((hex.parse().ok()?, t.peer.parse().ok()?, terms, deal, t.price_check))
                 })
                 .collect()
         };
-        for (peer, terms, deal, checked) in trades {
+        for (key, peer, terms, deal, checked) in trades {
             let Ok(expected) = self.trade_price(&terms) else {
                 continue;
             };
             match terms.my_role() {
                 Role::Maker => {
                     if deal.available(&terms, Role::Maker).contains(&Step::Price) {
-                        self.send_action_to(peer, Action::Price(expected), true);
+                        self.send_action_to(key, Action::Price(expected), true);
                     }
                 }
                 Role::Taker => {
@@ -2264,7 +2363,7 @@ impl App {
                     };
                     {
                         let mut store = self.store.lock().unwrap();
-                        if let Some(t) = store.state.trades.get_mut(&peer.to_hex()) {
+                        if let Some(t) = store.state.trades.get_mut(&key.to_hex()) {
                             t.price_check = Some(expected);
                         }
                         store.persist();
@@ -2282,16 +2381,28 @@ impl App {
         }
     }
 
-    fn send(self: &Arc<Self>, peer: PubKey, text: &str, action: Option<Action>) {
+    /// `key` is the conversation pubkey of the trade
+    fn send(self: &Arc<Self>, key: PubKey, text: &str, action: Option<Action>) {
+        let Some((peer, trade_id)) = self
+            .store
+            .lock()
+            .unwrap()
+            .state
+            .trades
+            .get(&key.to_hex())
+            .and_then(|t| Some((t.peer.parse::<PubKey>().ok()?, t.trade_id.clone())))
+        else {
+            return;
+        };
         if self.is_blocked(&peer) {
             self.status("unblock them first");
             return;
         }
-        let conv = Conversation::new(&self.sk(), peer);
+        let conv = Conversation::new(&self.sk(), peer, &trade_id);
         let (relays, needs_ping, evt) = {
             let mut store = self.store.lock().unwrap();
             let state = &mut store.state;
-            let Some(t) = state.trades.get_mut(&peer.to_hex()) else {
+            let Some(t) = state.trades.get_mut(&key.to_hex()) else {
                 return;
             };
             let offer = t.offer_id.as_deref().and_then(|h| ID::from_hex(h).ok());
@@ -2318,7 +2429,7 @@ impl App {
         self.render_trades();
 
         if needs_ping {
-            self.send_ping(peer);
+            self.send_ping(key);
         }
         let app = self.clone();
         tokio::spawn(async move {
@@ -2328,7 +2439,7 @@ impl App {
             }
             let answers = app
                 .deliver(&relays, evt, |answers| {
-                    app.set_deliveries(peer, &msg_id, answers)
+                    app.set_deliveries(key, &msg_id, answers)
                 })
                 .await;
             app.store.lock().unwrap().persist();
@@ -2339,7 +2450,7 @@ impl App {
                 ));
             }
             if mostly_failed(&answers) {
-                app.show_report(Report::Message(TradeRef::Ongoing(peer), msg_id), false);
+                app.show_report(Report::Message(TradeRef::Ongoing(key), msg_id), false);
             }
         });
     }
@@ -2367,27 +2478,30 @@ impl App {
     /// end the ongoing trade: with a public report (success or failure), or just archived.
     /// either way it moves from the json state to the history database and we stop listening.
     fn end_trade(self: &Arc<Self>, outcome: Outcome, comment: &str) {
-        let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
+        let Some(TradeRef::Ongoing(key)) = *self.current_trade.lock().unwrap() else {
             return;
         };
-        {
+        let trade_peer = {
             let mut store = self.store.lock().unwrap();
-            let Some(trade) = store.state.trades.get(&peer.to_hex()).cloned() else {
+            let Some(trade) = store.state.trades.get(&key.to_hex()).cloned() else {
                 return;
             };
             if let Err(err) = store
                 .history
-                .add(&peer.to_hex(), &trade, outcome, comment, now().0)
+                .add(&trade.peer, &trade, outcome, comment, now().0)
             {
                 drop(store);
                 self.status(format!("failed to save the trade in the history: {err}"));
                 return;
             }
-            store.state.trades.remove(&peer.to_hex());
+            store.state.trades.remove(&key.to_hex());
             store.persist();
-        }
-        self.dm_subs.lock().unwrap().remove(&peer.to_hex());
-        if outcome != Outcome::Archived {
+            trade.peer
+        };
+        self.dm_subs.lock().unwrap().remove(&key.to_hex());
+        if outcome != Outcome::Archived
+            && let Ok(peer) = trade_peer.parse()
+        {
             self.publish_report(peer, outcome == Outcome::Success, comment);
         }
         self.leave_trade();
@@ -2430,9 +2544,10 @@ impl App {
             let ongoing: Vec<TradeItem> = trades
                 .into_iter()
                 .filter_map(|(hex, t)| {
-                    let pk: PubKey = hex.parse().ok()?;
+                    let pk: PubKey = t.peer.parse().ok()?;
+                    let key: PubKey = hex.parse().ok()?;
                     Some(TradeItem {
-                        key: pk.to_npub().into(),
+                        key: key.to_npub().into(),
                         peer_name: display_name(&s.labels, &pk).into(),
                         peer_color: key_color(&pk),
                         summary: t.offer_summary.trim_start_matches("maker ").into(),
@@ -2446,7 +2561,7 @@ impl App {
                             })
                             .unwrap_or_default()
                             .into(),
-                        blocked: s.blocked.contains(hex),
+                        blocked: s.blocked.contains(&t.peer),
                     })
                 })
                 .collect();
@@ -2496,12 +2611,16 @@ impl App {
         }
         if blocked {
             // stop looking for their messages, that's all a block is
-            self.dm_subs.lock().unwrap().remove(&peer.to_hex());
+            for key in self.trades_with(&peer) {
+                self.dm_subs.lock().unwrap().remove(&key.to_hex());
+            }
             self.offers.lock().unwrap().retain(|o| o.maker != peer);
             self.trusted_offers.lock().unwrap().retain(|o| o.maker != peer);
             self.render_offers();
         } else {
-            self.ensure_dm_sub(peer, false);
+            for key in self.trades_with(&peer) {
+                self.ensure_dm_sub(key, false);
+            }
         }
         self.render_trades();
         self.render_trade();

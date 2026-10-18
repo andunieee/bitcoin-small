@@ -81,7 +81,12 @@ This is a new scheme, not NIP-17 or NIP-04.
 
 1. Both parties compute the same **conversation key** from NIP-44:
    `conversation_key = hkdf_extract(salt="nip44-v2", ecdh(my_sk, their_pk))`.
-   It is 32 bytes, so it is also a valid secp256k1 secret key. Its public key is the **conversation pubkey**.
+   Each trade has a **trade id**: an arbitrary string (the app uses 32 random hex characters, at most 64 characters
+   are accepted) that the taker makes up and sends in the ping. It is mixed in so that two trades between the same
+   two parties, even about the same offer, never share a conversation:
+   `conversation_key = sha256("smol-trade:" || hkdf_extract(...) || trade_id)`. Without a trade id (pings of older
+   versions) the key is the plain NIP-44 one.
+   The key is 32 bytes, so it is also a valid secp256k1 secret key. Its public key is the **conversation pubkey**.
 2. A message starts as an unsigned kind `14` **rumor**, as in NIP-17/NIP-59:
    `{id, pubkey: <real author>, created_at, kind: 14, tags: [["p", <recipient>], ["e", <offer id>]], content}`.
 3. The rumor is NIP-44-encrypted with the conversation key. The result goes into the `content` of a kind `8021` event,
@@ -105,12 +110,12 @@ Consequences:
 ### Pings (kind `28022`)
 
 The maker can't subscribe to a conversation pubkey without knowing who the taker is. So to start a conversation, the
-taker sends a **ping**: a kind `28022` event signed with the taker's real key, whose only tag is `["p", <maker>]`. It
-means "look, there is a DM for you from me." It goes to the offer's relays.
+taker sends a **ping**: a kind `28022` event signed with the taker's real key, whose tags are `["p", <maker>]` and
+`["trade", <trade id>]`. It means "look, there is a DM for you from me." It goes to the offer's relays.
 
 The maker's app listens for `{"kinds": [28022], "#p": [<me>]}` on the app relays and on the negotiation relays of the
-maker's recent offers. When a ping arrives from someone who isn't blocked, the app derives the conversation pubkey and
-subscribes to it. Pings from blocked npubs are ignored.
+maker's recent offers. When a ping arrives from someone who isn't blocked, the app derives the conversation pubkey from the
+trade id and subscribes to it. A ping with a new trade id is a new trade, even from someone it is already trading with. Pings from blocked npubs are ignored.
 
 Kind `8021` is a regular event, so relays store DMs and the other side doesn't need to be online when you send one.
 Each DM expires 30 days after it was sent: relays that support NIP-40 drop it then, and clients

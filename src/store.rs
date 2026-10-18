@@ -117,9 +117,15 @@ pub struct Message {
 /// a relay and its answer to something we published, none while it is still on its way
 pub type Delivery = (String, Option<Result<(), String>>);
 
-/// an ongoing trade with someone: one per peer, as the conversation key is per pair of keys
+/// an ongoing trade with someone. each has its own conversation, see `Conversation::new`
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Trade {
+    /// pubkey hex of the other side. old states have none, the key was the peer then
+    #[serde(default)]
+    pub peer: String,
+    /// the string that makes the conversation of this trade its own, empty for old trades
+    #[serde(default)]
+    pub trade_id: String,
     /// relays of the offer this trade started from, where both sides publish and listen
     pub relays: Vec<String>,
     pub offer_summary: String,
@@ -164,7 +170,7 @@ pub struct State {
     /// ids of the rumors we created, the only proof of who said what in a conversation
     #[serde(default)]
     pub my_rumors: HashSet<String>,
-    /// peer pubkey hex -> ongoing trade. past ones go to the history database
+    /// conversation pubkey hex -> ongoing trade. past ones go to the history database
     #[serde(default, alias = "conversations")]
     pub trades: BTreeMap<String, Trade>,
     #[serde(default)]

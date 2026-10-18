@@ -155,6 +155,9 @@ struct SavedTrade {
     /// the offer, for the taker to point at it in its messages
     offer_id: Option<String>,
     started_at: u32,
+    /// what makes the conversation of this trade its own, see `Conversation::new`
+    #[serde(default)]
+    trade_id: String,
 }
 
 /// a trade going on, rebuilt from the relay
@@ -387,8 +390,11 @@ impl Bot {
         let Some(offer) = self.persona.offer() else {
             return;
         };
+        let trade_id = ping_trade_id(&evt);
         let same_trade = self.talks.lock().unwrap().get(&peer).is_some_and(|t| {
-            !t.deal().concluded() && evt.created_at.0 < t.saved.started_at + REPING_SECS
+            t.saved.trade_id == trade_id
+                && !t.deal().concluded()
+                && evt.created_at.0 < t.saved.started_at + REPING_SECS
         });
         if same_trade {
             return;
@@ -410,6 +416,7 @@ impl Bot {
                 terms,
                 offer_id: None,
                 started_at: evt.created_at.0,
+                trade_id,
             },
         );
         self.persist();
@@ -449,24 +456,26 @@ impl Bot {
                 taken.drain(..excess);
             }
             let started_at = now().0;
+            let trade_id = new_trade_id();
             self.begin(
                 offer.maker,
                 SavedTrade {
                     terms: OfferTerms::from_offer(&offer, false),
                     offer_id: Some(offer.id.to_hex()),
                     started_at,
+                    trade_id: trade_id.clone(),
                 },
             );
             self.persist();
             // the maker only listens to us after this
-            self.publish(ping(&self.sk, &offer.maker));
+            self.publish(ping(&self.sk, &offer.maker, &trade_id));
             self.act(offer.maker);
         }
     }
 
     /// listen to the conversation with `peer`, replacing whatever trade there was with them
     fn begin(self: &Arc<Self>, peer: PubKey, saved: SavedTrade) {
-        let conv = Conversation::new(&self.sk, peer);
+        let conv = Conversation::new(&self.sk, peer, &saved.trade_id);
         let filter = Filter {
             kinds: Some(vec![KIND_DM]),
             authors: Some(vec![conv.pubkey()]),
@@ -653,8 +662,14 @@ mod tests {
     }
 
     impl Me {
-        fn new(sk: SecretKey, relay: Arc<MemoryRelay>, peer: PubKey, terms: OfferTerms) -> Self {
-            let conv = Conversation::new(&sk, peer);
+        fn new(
+            sk: SecretKey,
+            relay: Arc<MemoryRelay>,
+            peer: PubKey,
+            trade: &str,
+            terms: OfferTerms,
+        ) -> Self {
+            let conv = Conversation::new(&sk, peer, trade);
             let sub = relay.subscribe(
                 &[],
                 Filter {
@@ -755,10 +770,11 @@ mod tests {
             SecretKey::generate(),
             relay.clone(),
             seller,
+            "my-trade",
             OfferTerms::from_offer(&offer, false),
         );
         me.offer = Some(offer.id);
-        relay.publish(&[], ping(&me.sk, &seller));
+        relay.publish(&[], ping(&me.sk, &seller, "my-trade"));
         assert!(me.hear().await.text.starts_with("hello"));
 
         me.act(Action::Amount(20.0));
@@ -813,8 +829,19 @@ mod tests {
         let ping = tokio::time::timeout(Duration::from_secs(20), pings.recv())
             .await
             .unwrap();
-        assert!(matches!(ping, Some(Occurrence::Event(e)) if e.pubkey == taker));
-        let mut me = Me::new(sk, relay.clone(), taker, OfferTerms::from_offer(&offer, true));
+        let Some(Occurrence::Event(ping)) = ping else {
+            panic!("no ping")
+        };
+        assert_eq!(ping.pubkey, taker);
+        let trade = ping_trade_id(&ping);
+        assert!(!trade.is_empty());
+        let mut me = Me::new(
+            sk,
+            relay.clone(),
+            taker,
+            &trade,
+            OfferTerms::from_offer(&offer, true),
+        );
         assert!(me.hear().await.text.starts_with("hello"));
         me.hear().await;
         me.hear().await;

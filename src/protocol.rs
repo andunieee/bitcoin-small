@@ -266,16 +266,31 @@ impl Offer {
 #[derive(Clone)]
 pub struct Conversation {
     pub peer: PubKey,
+    /// what tells this trade from any other one with the same peer, empty for the legacy single
+    /// conversation per pair of keys
+    pub trade: String,
     pub key: [u8; 32],
     pub signer: SecretKey,
 }
 
 impl Conversation {
-    pub fn new(me: &SecretKey, peer: PubKey) -> Self {
-        let key = generate_conversation_key(&peer, me);
+    /// `trade` is a string the taker makes up for each trade and sends along in the ping. it goes
+    /// into the key so that two trades between the same two parties never share a conversation.
+    pub fn new(me: &SecretKey, peer: PubKey, trade: &str) -> Self {
+        let shared = generate_conversation_key(&peer, me);
+        let key = if trade.is_empty() {
+            shared
+        } else {
+            sha256(&[b"smol-trade:".as_slice(), &shared, trade.as_bytes()].concat())
+        };
         let signer = SecretKey::from_bytes(key)
             .expect("a conversation key outside the curve order is astronomically unlikely");
-        Self { peer, key, signer }
+        Self {
+            peer,
+            trade: trade.to_string(),
+            key,
+            signer,
+        }
     }
 
     /// the pubkey under which every message between the two parties is published.
@@ -379,12 +394,33 @@ impl Rumor {
     }
 }
 
-/// "there is a DM for you from me"
-pub fn ping(me: &SecretKey, peer: &PubKey) -> Event {
+/// the longest trade string we accept in a ping
+const MAX_TRADE_ID: usize = 64;
+
+/// a new string to tell a trade apart from the others with the same peer
+pub fn new_trade_id() -> String {
+    SecretKey::generate().pubkey().to_hex()[..32].to_string()
+}
+
+/// the trade string of a ping, empty if it has none or a bad one (pings of older versions)
+pub fn ping_trade_id(evt: &Event) -> String {
+    evt.tags
+        .find("trade")
+        .map(|t| t[1].clone())
+        .filter(|id| id.len() <= MAX_TRADE_ID)
+        .unwrap_or_default()
+}
+
+/// "there is a DM for you from me", about the trade `trade` (see `Conversation::new`)
+pub fn ping(me: &SecretKey, peer: &PubKey, trade: &str) -> Event {
+    let mut tags = vec![vec!["p".into(), peer.to_hex()]];
+    if !trade.is_empty() {
+        tags.push(vec!["trade".into(), trade.to_string()]);
+    }
     EventTemplate {
         created_at: now(),
         kind: KIND_PING,
-        tags: Tags(vec![vec!["p".into(), peer.to_hex()]]),
+        tags: Tags(tags),
         content: String::new(),
     }
     .finalize(me)
@@ -491,8 +527,8 @@ mod tests {
     fn both_sides_derive_the_same_conversation() {
         let a = SecretKey::generate();
         let b = SecretKey::generate();
-        let ca = Conversation::new(&a, b.pubkey());
-        let cb = Conversation::new(&b, a.pubkey());
+        let ca = Conversation::new(&a, b.pubkey(), "t");
+        let cb = Conversation::new(&b, a.pubkey(), "t");
         assert_eq!(ca.pubkey(), cb.pubkey());
 
         let (rumor, evt) = ca.wrap(&a.pubkey(), "hello", None, None);
@@ -505,7 +541,7 @@ mod tests {
 
         // a third party can't read or forge it
         let c = SecretKey::generate();
-        assert!(Conversation::new(&c, a.pubkey()).unwrap(&evt).is_none());
+        assert!(Conversation::new(&c, a.pubkey(), "t").unwrap(&evt).is_none());
     }
 
     #[test]

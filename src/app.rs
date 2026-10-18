@@ -21,8 +21,8 @@ use crate::store::{
     TRUSTED_PEERS_TO_ASK, Trade,
 };
 use crate::{
-    AppWindow, DealRow, DealView, MsgItem, OfferItem, PayItem, PersonItem, RelayAnswer, RelayItem,
-    ReportItem, SentItem, TradeItem, TradeView,
+    AppWindow, DealRow, DealView, HistoryItem, MsgItem, OfferItem, PayItem, PersonItem, RelayAnswer,
+    RelayItem, ReportItem, SentItem, TradeItem, TradeView,
 };
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(12);
@@ -280,15 +280,18 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     let a = app.clone();
     ui.on_open_offer(move |id| {
-        let item = {
+        let (item, mine, maker) = {
             let offers = a.offers.lock().unwrap();
             let Some(offer) = offers.iter().find(|o| o.id.to_hex() == id.as_str()) else {
                 return;
             };
-            a.offer_item(offer)
+            (a.offer_item(offer), offer.maker == a.me(), offer.maker)
         };
+        // the maker's recent trades, since they back the offer
+        let history = if mine { vec![] } else { a.offer_history(maker) };
         if let Some(ui) = a.ui.upgrade() {
             ui.set_current_offer(item);
+            ui.set_offer_history(ModelRc::new(VecModel::from(history)));
             ui.set_back_page(0);
             ui.set_page(1);
         }
@@ -1345,6 +1348,46 @@ impl App {
         }
     }
 
+    /// the rows shown on the offer page: the last trades with the maker, filled with our most
+    /// recent ones with other people when there aren't three of those with the maker.
+    fn offer_history(&self, maker: PubKey) -> Vec<HistoryItem> {
+        const RECENT: usize = 3;
+        let store = self.store.lock().unwrap();
+        let labels = &store.state.labels;
+        let maker_hex = maker.to_hex();
+        // most recently ended first
+        let mut rows: Vec<HistoryItem> = vec![];
+        for other in [false, true] {
+            for t in store.history.list(100) {
+                if rows.len() >= RECENT {
+                    break;
+                }
+                // first we take the maker's own trades, then we fill with those of other people
+                if (t.peer == maker_hex) != !other {
+                    continue;
+                }
+                let Some(peer) = t.peer.parse::<PubKey>().ok() else {
+                    continue;
+                };
+                // the maker's own rows don't repeat their name, only the filled ones say "with"
+                let (name, color) = if t.peer == maker_hex {
+                    (SharedString::default(), slint::Color::default())
+                } else {
+                    (display_name(labels, &peer).into(), key_color(&peer))
+                };
+                rows.push(HistoryItem {
+                    key: t.id.to_string().into(),
+                    peer_name: name,
+                    peer_color: color,
+                    outcome: t.outcome.as_str().into(),
+                    comment: t.comment.clone().into(),
+                    time: ago(Timestamp(t.ended_at)).into(),
+                });
+            }
+        }
+        rows
+    }
+
     fn render_offers(&self) {
         let (side, currency) = self.filters.lock().unwrap().clone();
         let items: Vec<OfferItem> = self
@@ -1971,7 +2014,8 @@ impl App {
                     peer.to_hex(),
                     Trade {
                         relays,
-                        offer_summary: "direct chat".into(),
+                        // the peer's name stands within the header line, so say it as a detail
+                        offer_summary: "· direct chat".into(),
                         started_at: now().0,
                         started_by_me: true,
                         ..Default::default()
@@ -2022,7 +2066,8 @@ impl App {
                 };
                 let view = TradeView {
                     ongoing: true,
-                    summary: t.offer_summary.clone().into(),
+                    // stored summaries may pre-date the "maker " word being shown inline, drop it
+                    summary: t.offer_summary.trim_start_matches("maker ").into(),
                     ..Default::default()
                 };
                 (
@@ -2039,7 +2084,7 @@ impl App {
                 };
                 let view = TradeView {
                     ongoing: false,
-                    summary: t.offer_summary.clone().into(),
+                    summary: t.offer_summary.trim_start_matches("maker ").into(),
                     ..Default::default()
                 };
                 (peer, (view, t.offer, t.messages, None))
@@ -2390,7 +2435,7 @@ impl App {
                         key: pk.to_npub().into(),
                         peer_name: display_name(&s.labels, &pk).into(),
                         peer_color: key_color(&pk),
-                        summary: t.offer_summary.clone().into(),
+                        summary: t.offer_summary.trim_start_matches("maker ").into(),
                         status: trade_status(t).into(),
                         last: t
                             .messages
@@ -2416,7 +2461,7 @@ impl App {
                         key: t.id.to_string().into(),
                         peer_name: display_name(&labels, &pk).into(),
                         peer_color: key_color(&pk),
-                        summary: t.offer_summary.clone().into(),
+                        summary: t.offer_summary.trim_start_matches("maker ").into(),
                         status: past_status(t).into(),
                         last: ago(Timestamp(t.ended_at)).into(),
                         blocked: false,
@@ -2827,7 +2872,7 @@ fn shown_messages(terms: Option<&OfferTerms>, messages: &[Message]) -> Vec<Shown
 
 fn offer_summary(offer: &Offer) -> String {
     format!(
-        "maker {}s bitcoin for {} at market {} · {} · {}",
+        "{}s bitcoin for {} at market {} · {} · {}",
         offer.side.as_str(),
         offer.currency,
         prices::format_premium(offer.premium),

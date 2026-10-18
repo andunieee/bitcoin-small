@@ -20,8 +20,7 @@ use crate::relays::{Occurrence, Relays};
 use crate::store::{Files, Message, load_or_create_key};
 
 pub const XFK: &str = "XFK";
-/// where the practice market is. `.invalid` never resolves, so it can't reach a real relay.
-pub const RELAY: &str = "wss://xfk.invalid/";
+pub const RELAY: &str = "wss://xfk.example.com/";
 pub const PRICE_API: &str = "xfk";
 /// what a bitcoin costs in XFK, always: 1 XFK is 1,000 sats
 pub const PRICE: f64 = 100_000.0;
@@ -87,8 +86,7 @@ impl Persona {
             bitcoin_methods: BITCOIN_METHODS.iter().map(|m| m.to_string()).collect(),
             relays: vec![RELAY.into()],
             description: format!(
-                "a pretend {} to practice with: XFK isn't real money and nothing is sent for real. \
-                 take this offer and go through a whole trade.",
+                "I'm just a fake {} to practice with.",
                 self.name()
             ),
         })
@@ -97,24 +95,19 @@ impl Persona {
     fn hello(self) -> &'static str {
         match self {
             Persona::Seller | Persona::Buyer => {
-                "hello! I'm a pretend trader, here so you can practice. XFK isn't real money and \
-                 no bitcoin moves: pick an amount and the methods, give your details, say when \
-                 you've sent and I'll do my part."
+                "hello! how do you want to do this fake trade?"
             }
             Persona::Taker => {
-                "hello! I'm a pretend taker, here so you can practice the maker's side. XFK isn't \
-                 real money and no bitcoin moves: I'll pick what I want from your offer, then give \
-                 your details and send your part when it's your turn."
+                "hello! are you there for this little fake trade? I'll start"
             }
         }
     }
 }
 
-const BYE: &str = "that was the whole trade! nothing was sent for real. now conclude it on your \
-                   side: with real people, that is where you say how it went.";
+const BYE: &str = "that was the whole trade! thanks, now conclude and rate me please";
 
 /// where the bots want their pretend fiat
-const PAYMENT_DETAILS: &str = "pretend account 0000 1234 5678, Xfk Bot. nothing to pay for real.";
+const PAYMENT_DETAILS: &str = "pretend account: 0000 1234 5678, Xfk Bot";
 
 /// where the bots want their pretend bitcoin, for each method that checks the format
 fn bitcoin_destination(method: &str) -> &'static str {
@@ -126,7 +119,7 @@ fn bitcoin_destination(method: &str) -> &'static str {
             "ark1qv9pzxqlyckngw6zf9g9whn9d3eh4qvg37tfmf9tk2uup37w6hww86h3lrlsvrg5rv3zjvph8ez5c566v95x7anasj9e9xdq57htt0xrf8m2qn"
         }
         "rootstock" => "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
-        _ => "anywhere is fine, this is practice",
+        _ => "thefaker@xfk.example.com",
     }
 }
 

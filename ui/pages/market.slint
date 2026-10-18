@@ -1,6 +1,13 @@
 import { ComboBox, ListView } from "std-widgets.slint";
 import { OfferItem } from "../models.slint";
-import { Card, Muted, Tip, SideBadge, Identity, Button } from "../widgets.slint";
+import {
+    Card,
+    Muted,
+    Tip,
+    SideBadge,
+    Identity,
+    Button,
+} from "../widgets.slint";
 
 export component MarketPage inherits VerticalLayout {
     in property <[OfferItem]> offers;
@@ -34,7 +41,7 @@ export component MarketPage inherits VerticalLayout {
     HorizontalLayout {
         spacing: 8px;
         ComboBox {
-            model: ["all", "sell", "buy"];
+            model: ["sellers and buyers", "bitcoin sellers", "bitcoin buyers"];
             current-value <=> root.filter-side;
             selected => {
                 root.filters-changed();

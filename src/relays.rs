@@ -359,14 +359,14 @@ mod tests {
 
     #[test]
     fn memory_relay() {
-        let relay = MemoryRelay::new("wss://xfk.invalid", None);
-        assert_eq!(relay.url(), "wss://xfk.invalid/");
+        let relay = MemoryRelay::new("wss://xfk.example.com", None);
+        assert_eq!(relay.url(), "wss://xfk.example.com/");
         let sk = SecretKey::generate();
         let note = event(&sk, 1, vec![]);
         let mut answers = relay.publish(&[], note.clone());
         assert_eq!(
             answers.try_recv().unwrap(),
-            ("wss://xfk.invalid/".into(), Ok(()))
+            ("wss://xfk.example.com/".into(), Ok(()))
         );
 
         // stored, then eose, then live

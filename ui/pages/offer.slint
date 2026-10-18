@@ -1,12 +1,14 @@
 import { ScrollView, Palette } from "std-widgets.slint";
-import { OfferItem } from "../models.slint";
+import { OfferItem, HistoryItem } from "../models.slint";
 import { Card, Title, Muted, SideBadge, Identity, Button } from "../widgets.slint";
 
 export component OfferPage inherits ScrollView {
     in property <OfferItem> current-offer;
+    in property <[HistoryItem]> history;
     callback open-profile(string);
     callback contact-maker(string);
     callback close-offer(string);
+    callback open-history(string);
     callback back();
 
     content-width: self.visible-width;
@@ -31,6 +33,17 @@ export component OfferPage inherits ScrollView {
             VerticalLayout {
                 padding: 12px;
                 spacing: 6px;
+                Identity {
+                    text: root.current-offer.maker-name;
+                    tint: root.current-offer.maker-color;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.open-profile(root.current-offer.maker);
+                        }
+                    }
+                }
+
                 Text {
                     text: "price: market " + root.current-offer.premium + " (" + root.current-offer.price-api + ")";
                     wrap: word-wrap;
@@ -75,33 +88,68 @@ export component OfferPage inherits ScrollView {
                 }
             }
         }
-        if !root.current-offer.mine: HorizontalLayout {
-            spacing: 6px;
-            alignment: start;
-            Text {
-                text: "maker:";
-                vertical-alignment: center;
-            }
+        if !root.current-offer.mine && root.history.length == 0: Muted {
+            text: "you have never traded with them.";
+        }
 
-            Identity {
-                text: root.current-offer.maker-name;
-                tint: root.current-offer.maker-color;
-                TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.open-profile(root.current-offer.maker);
+        if !root.current-offer.mine && root.history.length > 0: Card {
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                Text {
+                    text: "Recent trades";
+                    font-weight: 700;
+                }
+
+                for item in root.history: row := Rectangle {
+                    background: row-area.has-hover && row-area.enabled ? Palette.alternate-background : transparent;
+                    height: row-column-layout.preferred-height;
+                    row-column-layout := HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            width: 16px;
+                            text: item.outcome == "success" ? "✓" : item.outcome == "failure" ? "✗" : "–";
+                            color: item.outcome == "success" ? #2e7d32 : item.outcome == "failure" ? #c62828 : Palette.foreground.transparentize(40%);
+                            font-weight: 700;
+                        }
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            if item.peer-name != "": HorizontalLayout {
+                                spacing: 4px;
+                                Muted {
+                                    text: "with";
+                                    vertical-alignment: center;
+                                }
+
+                                Identity {
+                                    text: item.peer-name;
+                                    tint: item.peer-color;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                }
+                            }
+
+                            Text {
+                                text: item.comment != "" ? item.comment : (item.outcome == "success" ? "successful trade" : item.outcome == "failure" ? "failed trade" : "archived, no report");
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        Muted {
+                            text: item.time;
+                        }
+                    }
+
+                    row-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.open-history(item.key);
+                        }
                     }
                 }
             }
         }
-
-        Button {
-            text: "Maker's trade history";
-            clicked => {
-                root.open-profile(root.current-offer.maker);
-            }
-        }
-
         // from the taker's point of view, like the badge
         if !root.current-offer.mine: Rectangle {
             height: 40px;

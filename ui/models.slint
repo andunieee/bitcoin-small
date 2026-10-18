@@ -1,3 +1,16 @@
+// one row in the recent trades shown on the offer page
+export struct HistoryItem {
+    // the past trade's id, to open it
+    key: string,
+    // our name for who we traded with, empty when it is the offer's maker
+    peer-name: string,
+    peer-color: color,
+    // "success", "failure" or "archived"
+    outcome: string,
+    comment: string,
+    time: string,
+}
+
 export struct OfferItem {
     id: string,
     maker: string,

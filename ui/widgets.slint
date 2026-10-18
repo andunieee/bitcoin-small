@@ -57,19 +57,19 @@ export component NavButton inherits Rectangle {
 
 export component SideBadge inherits Rectangle {
     in property <string> side;
-    width: 48px;
     height: 22px;
     border-radius: 4px;
     background: side == "sell" ? #2e7d32 : #1565c0;
-    Text {
-        // from the taker's point of view: a maker who sells is someone you can buy from
-        text: root.side == "sell" ? "SELLS" : "BUYS";
+    // badge describes what the maker does; a maker who sells is someone you can buy from
+    text := Text {
+        text: root.side == "sell" ? "SELLING BITCOIN" : "BUYING BITCOIN";
         color: white;
         font-size: 11px;
         font-weight: 700;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
+    width: text.preferred-width + 12px;
 }
 
 // someone, by our label for them or by their short key, in a color that comes from their key

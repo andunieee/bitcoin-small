@@ -1,5 +1,5 @@
 import { ScrollView, Palette } from "std-widgets.slint";
-import { OfferItem, TradeItem, TradeView, DealView, MsgItem, ReportItem, PersonItem, RelayItem, SentItem, PayItem } from "models.slint";
+import { OfferItem, HistoryItem, TradeItem, TradeView, DealView, MsgItem, ReportItem, PersonItem, RelayItem, SentItem, PayItem } from "models.slint";
 import { Card, Title, Button, NavButton } from "widgets.slint";
 import { SentReport } from "trade_widgets.slint";
 import { MarketPage } from "pages/market.slint";
@@ -11,7 +11,7 @@ import { ProfilePage } from "pages/profile.slint";
 import { PeoplePage } from "pages/people.slint";
 import { SettingsPage } from "pages/settings.slint";
 
-export { OfferItem, TradeItem, TradeView, DealRow, DealView, MsgItem, ReportItem, PersonItem, RelayItem, RelayAnswer, SentItem, PayItem } from "models.slint";
+export { OfferItem, HistoryItem, TradeItem, TradeView, DealRow, DealView, MsgItem, ReportItem, PersonItem, RelayItem, RelayAnswer, SentItem, PayItem } from "models.slint";
 
 export component AppWindow inherits Window {
     title: "bitcoin smol";
@@ -37,6 +37,8 @@ export component AppWindow inherits Window {
     // until we make or take an offer, the market points to the guide
     in property <bool> newcomer;
     in property <OfferItem> current-offer;
+    // the recent trades shown on the offer page
+    in property <[HistoryItem]> offer-history;
     callback refresh-offers();
     callback filters-changed();
     callback open-offer(string);
@@ -234,6 +236,7 @@ export component AppWindow inherits Window {
                 // ---------------------------------------------------------------- offer detail
                 if root.page == 1: OfferPage {
                     current-offer: root.current-offer;
+                    history: root.offer-history;
                     open-profile(who) => {
                         root.open-profile(who);
                     }
@@ -242,6 +245,9 @@ export component AppWindow inherits Window {
                     }
                     close-offer(id) => {
                         root.close-offer(id);
+                    }
+                    open-history(id) => {
+                        root.open-past-trade(id);
                     }
                     back => {
                         root.page = 0;

@@ -45,24 +45,28 @@ export component TradePage inherits VerticalLayout {
                 spacing: 8px;
                 VerticalLayout {
                     horizontal-stretch: 1;
-                    spacing: 4px;
                     alignment: center;
-                    Text {
-                        text: root.trade.summary;
-                        font-weight: 700;
-                        font-size: 13px;
-                        wrap: word-wrap;
-                    }
-
-                    Identity {
-                        text: root.trade.peer-name + (root.trade.blocked ? " (blocked)" : "");
-                        tint: root.trade.peer-color;
-                        font-size: 13px;
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.open-profile(root.trade.peer);
+                    // the peer's name stands in for the "maker" word of the summary sentence
+                    HorizontalLayout {
+                        spacing: 5px;
+                        Identity {
+                            text: root.trade.peer-name + (root.trade.blocked ? " (blocked)" : "");
+                            tint: root.trade.peer-color;
+                            font-size: 13px;
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.open-profile(root.trade.peer);
+                                }
                             }
+                        }
+
+                        Text {
+                            text: root.trade.summary;
+                            font-size: 13px;
+                            font-weight: 700;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
                         }
                     }
                 }
@@ -159,11 +163,11 @@ export component TradePage inherits VerticalLayout {
             spacing: 8px;
             ListView {
                 vertical-stretch: 1;
-                padding-right: 6px;
                 for msg in root.messages: HorizontalLayout {
                     padding-bottom: 6px;
                     padding-right: 6px;
                     alignment: msg.mine ? end : start;
+                    spacing: 8px;
                     if !msg.meta: Rectangle {
                         width: min(300px, plain-text.preferred-width + 24px);
                         height: plain-layout.preferred-height;

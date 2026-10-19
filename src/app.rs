@@ -1430,7 +1430,11 @@ impl App {
             .lock()
             .unwrap()
             .iter()
-            .filter(|o| side == "all" || o.side.as_str() == side)
+            .filter(|o| match side.as_str() {
+                "bitcoin sellers" => o.side == Side::Sell,
+                "bitcoin buyers" => o.side == Side::Buy,
+                _ => true,
+            })
             // the practice market only shows on its own
             .filter(|o| match currency.as_str() {
                 "all" | "" => !xfk::is_xfk(&o.currency),

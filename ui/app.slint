@@ -31,7 +31,7 @@ export component AppWindow inherits Window {
     // starts with "all" so the filter's initial "all" is already in the model.
     // setup_ui replaces it with the full list, which keeps "all" first.
     in property <[string]> currencies: ["all"];
-    in-out property <string> filter-side: "all";
+    in-out property <string> filter-side: "sellers and buyers";
     in-out property <string> filter-currency: "all";
     in property <bool> loading;
     // until we make or take an offer, the market points to the guide

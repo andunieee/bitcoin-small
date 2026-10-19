@@ -14,6 +14,7 @@ export component DealPanel inherits VerticalLayout {
     callback pick-payment(string);
     callback give-details(string);
     callback mark-sent();
+    callback conclude();
     // why the details can't be sent, empty when they can
     pure callback check-details(string) -> string;
     property <string> details-error: root.check-details(root.draft);
@@ -245,6 +246,31 @@ export component DealPanel inherits VerticalLayout {
                 primary: true;
                 clicked => {
                     root.mark-sent();
+                }
+            }
+        }
+    }
+    if root.deal.report-hint != "": Card {
+        VerticalLayout {
+            padding-top: 8px;
+            padding-bottom: 8px;
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 4px;
+            Text {
+                text: "next step: report, when you are sure";
+                font-weight: 700;
+            }
+
+            Text {
+                text: root.deal.report-hint;
+                wrap: word-wrap;
+            }
+
+            Button {
+                text: "Report the trade…";
+                clicked => {
+                    root.conclude();
                 }
             }
         }

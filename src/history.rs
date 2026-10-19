@@ -30,6 +30,18 @@ impl Outcome {
     }
 }
 
+/// a report we published about a past trade, and where, to ask those relays to drop it later
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PublishedReport {
+    /// event id hex
+    pub id: String,
+    pub success: bool,
+    pub comment: String,
+    pub created_at: u32,
+    /// the relays that accepted it
+    pub relays: Vec<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PastTrade {
     /// the key in the database, not stored in the value
@@ -47,6 +59,9 @@ pub struct PastTrade {
     pub outcome: Outcome,
     /// the comment of the report we published, if any
     pub comment: String,
+    /// every report we published about it, oldest first. we can change our mind and report again.
+    #[serde(default)]
+    pub reports: Vec<PublishedReport>,
     pub messages: Vec<Message>,
 }
 
@@ -72,7 +87,7 @@ impl History {
         outcome: Outcome,
         comment: &str,
         ended_at: u32,
-    ) -> Result<(), String> {
+    ) -> Result<i64, String> {
         let past = PastTrade {
             id: 0,
             peer: peer.to_string(),
@@ -84,12 +99,13 @@ impl History {
             ended_at,
             outcome,
             comment: comment.to_string(),
+            reports: vec![],
             messages: trade.messages.clone(),
         };
         let json = serde_json::to_string(&past).map_err(|e| e.to_string())?;
 
         let txn = self.db.begin_write().map_err(err)?;
-        {
+        let id = {
             let mut trades = txn.open_table(TRADES).map_err(err)?;
             let id = match trades.last().map_err(err)? {
                 Some((last, _)) => last.value() + 1,
@@ -100,8 +116,72 @@ impl History {
                 .map_err(err)?
                 .insert((ended_at, id), ())
                 .map_err(err)?;
+            id
+        };
+        txn.commit().map_err(err)?;
+        Ok(id as i64)
+    }
+
+    /// remember a report we published about a trade. the trade counts as concluded the way the
+    /// report says, until it is deleted.
+    pub fn add_report(&self, id: i64, report: PublishedReport) {
+        self.update(id, |t| {
+            t.outcome = if report.success {
+                Outcome::Success
+            } else {
+                Outcome::Failure
+            };
+            t.comment = report.comment.clone();
+            t.reports.push(report);
+        });
+    }
+
+    /// forget one report of a trade and return it. the trade goes by its latest remaining
+    /// report, or back to being archived.
+    pub fn remove_report(&self, id: i64, report_id: &str) -> Option<PublishedReport> {
+        let mut removed = None;
+        self.update(id, |t| {
+            if let Some(i) = t.reports.iter().position(|r| r.id == report_id) {
+                removed = Some(t.reports.remove(i));
+            }
+            match t.reports.last() {
+                Some(last) => {
+                    t.outcome = if last.success {
+                        Outcome::Success
+                    } else {
+                        Outcome::Failure
+                    };
+                    t.comment = last.comment.clone();
+                }
+                None => {
+                    t.outcome = Outcome::Archived;
+                    t.comment.clear();
+                }
+            }
+        });
+        removed
+    }
+
+    fn update(&self, id: i64, f: impl FnOnce(&mut PastTrade)) {
+        let res = (|| {
+            let txn = self.db.begin_write().map_err(err)?;
+            {
+                let mut trades = txn.open_table(TRADES).map_err(err)?;
+                let json = trades
+                    .get(id as u64)
+                    .map_err(err)?
+                    .map(|j| j.value().to_string());
+                if let Some(mut t) = json.and_then(|j| past_trade(id as u64, &j)) {
+                    f(&mut t);
+                    let json = serde_json::to_string(&t).map_err(|e| e.to_string())?;
+                    trades.insert(id as u64, json.as_str()).map_err(err)?;
+                }
+            }
+            txn.commit().map_err(err)
+        })();
+        if let Err(e) = res {
+            log::error!("failed to update past trade {id}: {e}");
         }
-        txn.commit().map_err(err)
     }
 
     /// most recently ended first

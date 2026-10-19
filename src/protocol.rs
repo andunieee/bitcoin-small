@@ -458,9 +458,19 @@ pub fn trade_report(me: &SecretKey, peer: &PubKey, success: bool, comment: &str)
 /// the relays someone writes to, from their nip-65 relay list: `r` tags marked "write" or not
 /// marked at all
 pub fn write_relays(relay_list: &Event) -> Vec<String> {
+    marked_relays(relay_list, "write")
+}
+
+/// the relays someone reads from, from their nip-65 relay list: `r` tags marked "read" or not
+/// marked at all
+pub fn read_relays(relay_list: &Event) -> Vec<String> {
+    marked_relays(relay_list, "read")
+}
+
+fn marked_relays(relay_list: &Event, wanted: &str) -> Vec<String> {
     let mut relays: Vec<String> = vec![];
     for tag in relay_list.tags.find_all("r") {
-        if tag.get(2).is_some_and(|marker| marker != "write") {
+        if tag.get(2).is_some_and(|marker| marker != wanted) {
             continue;
         }
         if let Ok(url) = ritualistic::normalize_url(&tag[1]) {
@@ -541,7 +551,11 @@ mod tests {
 
         // a third party can't read or forge it
         let c = SecretKey::generate();
-        assert!(Conversation::new(&c, a.pubkey(), "t").unwrap(&evt).is_none());
+        assert!(
+            Conversation::new(&c, a.pubkey(), "t")
+                .unwrap(&evt)
+                .is_none()
+        );
     }
 
     #[test]

@@ -18,7 +18,11 @@ use crate::protocol::{KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS};
 #[cfg(not(debug_assertions))]
 pub const DEFAULT_RELAYS: &[&str] = &["wss://nostr.wine"];
 #[cfg(debug_assertions)]
-pub const DEFAULT_RELAYS: &[&str] = &["wss://nostr.wine", "wss://nos.lol", "wss://relay.primal.net"];
+pub const DEFAULT_RELAYS: &[&str] = &[
+    "wss://nostr.wine",
+    "wss://nos.lol",
+    "wss://relay.primal.net",
+];
 
 /// our nip-65 write relays, when we make our first offer and have no relay list yet
 pub const DEFAULT_WRITE_RELAYS: &[&str] = &["wss://relay.primal.net", "wss://nos.lol"];
@@ -256,6 +260,13 @@ impl Store {
         match self.db.save_event(evt) {
             Ok(()) | Err(ritualistic::database::DatabaseError::DuplicateEvent) => {}
             Err(err) => log::warn!("failed to save event {}: {err}", evt.id),
+        }
+    }
+
+    /// forget an event we saved
+    pub fn forget_event(&self, evt: &ritualistic::ID) {
+        if let Err(err) = self.db.delete_event(evt.short()) {
+            log::warn!("failed to forget event {evt}: {err}");
         }
     }
 

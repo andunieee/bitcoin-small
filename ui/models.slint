@@ -43,6 +43,15 @@ export struct TradeItem {
     blocked: bool,
 }
 
+// a report we published about a past trade
+export struct PastReportItem {
+    id: string,
+    success: bool,
+    comment: string,
+    time: string,
+    relays: int,
+}
+
 export struct TradeView {
     ongoing: bool,
     peer: string,
@@ -83,6 +92,8 @@ export struct DealView {
     can-send: bool,
     send-hint: string,
     send-label: string,
+    // once both sides have sent their part: why to take our time before reporting
+    report-hint: string,
 }
 
 export struct MsgItem {

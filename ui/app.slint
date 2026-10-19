@@ -1,5 +1,5 @@
 import { ScrollView, Palette } from "std-widgets.slint";
-import { OfferItem, HistoryItem, TradeItem, TradeView, DealView, MsgItem, ReportItem, PersonItem, RelayItem, SentItem, PayItem } from "models.slint";
+import { OfferItem, HistoryItem, TradeItem, TradeView, DealView, MsgItem, PastReportItem, ReportItem, PersonItem, RelayItem, SentItem, PayItem } from "models.slint";
 import { Card, Title, Button, NavButton } from "widgets.slint";
 import { SentReport } from "trade_widgets.slint";
 import { MarketPage } from "pages/market.slint";
@@ -11,7 +11,7 @@ import { ProfilePage } from "pages/profile.slint";
 import { PeoplePage } from "pages/people.slint";
 import { SettingsPage } from "pages/settings.slint";
 
-export { OfferItem, HistoryItem, TradeItem, TradeView, DealRow, DealView, MsgItem, ReportItem, PersonItem, RelayItem, RelayAnswer, SentItem, PayItem } from "models.slint";
+export { OfferItem, HistoryItem, TradeItem, TradeView, DealRow, DealView, MsgItem, PastReportItem, ReportItem, PersonItem, RelayItem, RelayAnswer, SentItem, PayItem } from "models.slint";
 
 export component AppWindow inherits Window {
     title: "bitcoin smol";
@@ -79,6 +79,8 @@ export component AppWindow inherits Window {
     in property <[TradeItem]> past-trades;
     in property <TradeView> trade;
     in property <[MsgItem]> messages;
+    // the reports we published about the past trade shown
+    in property <[PastReportItem]> trade-reports;
     in property <DealView> deal;
     in-out property <string> trade-confirming;
     in-out property <string> trade-details-draft;
@@ -98,6 +100,7 @@ export component AppWindow inherits Window {
     callback conclude-trade(bool, string);
     callback archive-trade();
     callback delete-trade();
+    callback delete-report(string);
 
     // profile
     in property <string> profile-npub;
@@ -315,6 +318,7 @@ export component AppWindow inherits Window {
                 if root.page == 4: TradePage {
                     trade: root.trade;
                     messages: root.messages;
+                    reports: root.trade-reports;
                     deal: root.deal;
                     trade-confirming <=> root.trade-confirming;
                     trade-details-draft <=> root.trade-details-draft;
@@ -353,6 +357,9 @@ export component AppWindow inherits Window {
                     }
                     trade-mark-sent => {
                         root.trade-mark-sent();
+                    }
+                    delete-report(id) => {
+                        root.delete-report(id);
                     }
                     delete-trade => {
                         root.delete-trade();

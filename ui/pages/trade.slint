@@ -5,7 +5,7 @@ import {
     ListView,
     Palette,
 } from "std-widgets.slint";
-import { TradeView, MsgItem, DealView } from "../models.slint";
+import { TradeView, MsgItem, PastReportItem, DealView } from "../models.slint";
 import { Card, Muted, Identity, Button } from "../widgets.slint";
 import { DealPanel } from "../deal.slint";
 import { TradeActions } from "../trade_widgets.slint";
@@ -13,6 +13,7 @@ import { TradeActions } from "../trade_widgets.slint";
 export component TradePage inherits VerticalLayout {
     in property <TradeView> trade;
     in property <[MsgItem]> messages;
+    in property <[PastReportItem]> reports;
     in property <DealView> deal;
     in-out property <string> trade-confirming;
     in-out property <string> trade-details-draft;
@@ -31,6 +32,7 @@ export component TradePage inherits VerticalLayout {
     pure callback trade-check-details(string) -> string;
     callback trade-mark-sent();
     callback delete-trade();
+    callback delete-report(string);
     callback open-message-report(string);
 
     padding: 16px;
@@ -71,6 +73,14 @@ export component TradePage inherits VerticalLayout {
                     }
                 }
 
+                if !root.trade.ongoing && !root.trade-concluding: Button {
+                    text: root.reports.length > 0 ? "Report again" : "Report";
+                    small: true;
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        root.trade-concluding = true;
+                    }
+                }
                 if root.trade.ongoing && !root.trade-concluding: TradeActions {
                     conclude => {
                         root.trade-concluding = true;
@@ -119,6 +129,39 @@ export component TradePage inherits VerticalLayout {
         }
     }
 
+    // what we reported about a trade that is over
+    if !root.trade.ongoing && root.reports.length > 0: Card {
+        VerticalLayout {
+            padding: 10px;
+            spacing: 4px;
+            for r in root.reports: HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: r.success ? "✓" : "✗";
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: (r.comment == "" ? "no comment" : "\"" + r.comment + "\"");
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                }
+
+                Muted {
+                    text: r.time + " · " + r.relays + " relays";
+                }
+
+                Button {
+                    text: "Delete";
+                    small: true;
+                    clicked => {
+                        root.delete-report(r.id);
+                    }
+                }
+            }
+        }
+    }
+
     // on wide screens the deal sits next to the chat, otherwise above it
     if root.deal.active && !root.trade-wide: sv-deal-top := ScrollView {
         height: min(dp-top.preferred-height, root.height * 0.45);
@@ -151,6 +194,9 @@ export component TradePage inherits VerticalLayout {
                 }
                 mark-sent => {
                     root.trade-mark-sent();
+                }
+                conclude => {
+                    root.trade-concluding = true;
                 }
             }
         }
@@ -315,6 +361,9 @@ export component TradePage inherits VerticalLayout {
                     }
                     mark-sent => {
                         root.trade-mark-sent();
+                    }
+                    conclude => {
+                        root.trade-concluding = true;
                     }
                 }
             }

@@ -76,7 +76,7 @@ export component ProfilePage inherits ScrollView {
         }
 
         Text {
-            text: root.profile-is-me ? "Your trade reports" : "Our history with them";
+            text: root.profile-is-me ? "Your trade reports" : "Your history with them";
             font-weight: 700;
         }
 
@@ -122,7 +122,7 @@ export component ProfilePage inherits ScrollView {
         }
 
         if !root.profile-is-me: Text {
-            text: "What the people we trust say";
+            text: "What the people you trust say";
             font-weight: 700;
         }
 

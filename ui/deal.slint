@@ -86,7 +86,7 @@ export component DealPanel inherits VerticalLayout {
             padding-right: 14px;
             spacing: 4px;
             Text {
-                text: "next step: How much?";
+                text: "next step: how much?";
                 font-weight: 700;
             }
 
@@ -122,7 +122,7 @@ export component DealPanel inherits VerticalLayout {
             padding-right: 14px;
             spacing: 4px;
             Text {
-                text: "next step: Your price";
+                text: "next step: your price";
                 font-weight: 700;
             }
 
@@ -151,14 +151,14 @@ export component DealPanel inherits VerticalLayout {
         }
     }
     if root.deal.bitcoin-choices.length > 0: Choices {
-        title: "next step: How is the bitcoin sent?";
+        title: "next step: how is the bitcoin sent?";
         options: root.deal.bitcoin-choices;
         picked(m) => {
             root.pick-bitcoin(m);
         }
     }
     if root.deal.payment-choices.length > 0: Choices {
-        title: "next step: How is the fiat sent?";
+        title: "next step: how is the fiat sent?";
         options: root.deal.payment-choices;
         picked(m) => {
             root.pick-payment(m);

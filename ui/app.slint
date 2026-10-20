@@ -92,6 +92,7 @@ export component AppWindow inherits Window {
     callback close-offer(string);
     callback send-message(string);
     callback trade-pick-amount(string);
+    pure callback offer-problem(string, string, string, string, string, string, string, [PayItem], [PayItem]) -> string;
     callback trade-quote-price(string);
     callback trade-pick-bitcoin(string);
     callback trade-pick-payment(string);
@@ -323,6 +324,9 @@ export component AppWindow inherits Window {
                         }
                         toggle-bitcoin(name, checked) => {
                             root.toggle-bitcoin(name, checked);
+                        }
+                        offer-problem(c, pr, mn, mx, o, r, pr2, b, p) => {
+                            return root.offer-problem(c, pr, mn, mx, o, r, pr2, b, p);
                         }
                         publish-offer => {
                             root.publish-offer();

@@ -350,6 +350,24 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
         }
     });
 
+    ui.on_offer_problem(
+        |currency, premium, min, max, other, relays, publish_relays, bitcoin, payment| {
+            offer_problem(
+                &currency,
+                &premium,
+                &min,
+                &max,
+                &other,
+                &relays,
+                &publish_relays,
+                &bitcoin,
+                &payment,
+            )
+            .unwrap_or_default()
+            .into()
+        },
+    );
+
     let a = app.clone();
     ui.on_publish_offer(move || a.publish_offer());
 
@@ -613,6 +631,52 @@ fn set_checked(model: &ModelRc<PayItem>, name: &str, checked: bool) {
             },
         );
     }
+}
+
+/// what is still missing before an offer can be published, for the publish button
+#[allow(clippy::too_many_arguments)]
+fn offer_problem(
+    currency: &str,
+    premium: &str,
+    min: &str,
+    max: &str,
+    other_payments: &str,
+    relays: &str,
+    publish_relays: &str,
+    bitcoin: &ModelRc<PayItem>,
+    payment: &ModelRc<PayItem>,
+) -> Option<String> {
+    if prices::parse_premium(premium).is_none() {
+        return Some("the premium is invalid, use a number like 1 or -0.5".into());
+    }
+    match (prices::parse_amount(min), prices::parse_amount(max)) {
+        (Some(min), Some(max)) if min > max => {
+            return Some("the minimum amount can't be more than the maximum".into());
+        }
+        (Some(_), Some(_)) => {}
+        _ => return Some(format!("enter the minimum and maximum amount in {currency}")),
+    }
+    if checked_names(bitcoin).is_empty() {
+        return Some("pick at least one way to send bitcoin".into());
+    }
+    if checked_names(payment).is_empty() && split_list(other_payments).is_empty() {
+        return Some("pick at least one payment method".into());
+    }
+    if !xfk::is_xfk(currency) {
+        let usable = |list: &str| {
+            split_list(list)
+                .iter()
+                .filter_map(|r| ritualistic::normalize_url(r).ok())
+                .any(|u| u.to_string() != xfk::RELAY)
+        };
+        if !usable(relays) {
+            return Some("add at least one relay for the negotiation".into());
+        }
+        if !usable(publish_relays) {
+            return Some("add at least one relay to publish the offer to".into());
+        }
+    }
+    None
 }
 
 fn checked_names(model: &ModelRc<PayItem>) -> Vec<String> {
@@ -1497,7 +1561,7 @@ impl App {
         ui.set_create_publish_relays(self.app_relays().join(", ").into());
         ui.set_create_side(d.side.into());
         ui.set_create_currency(d.currency.clone().into());
-        ui.set_create_premium(prices::format_premium(d.premium).into());
+        ui.set_create_premium(prices::format_premium(d.premium).trim_end_matches('%').into());
         ui.set_bitcoin_options(checklist(BITCOIN_METHODS, &d.bitcoin_methods));
         ui.set_create_description("".into());
         self.create_currency_changed(ui, &d.currency);
@@ -1570,7 +1634,7 @@ impl App {
             let api = ui.get_create_api().to_string();
             let key = (cur.clone(), api.clone());
             let text = match prices::parse_premium(&ui.get_create_premium()) {
-                None => "invalid premium, use something like +1% or -0.5%".to_string(),
+                None => "invalid premium, use a number like 1 or -0.5".to_string(),
                 Some(premium) => match app.prices.lock().unwrap().get(&key) {
                     Some(m) => format!(
                         "market {} {cur}/BTC ({api}) → your price {} {cur}/BTC",
@@ -1591,7 +1655,7 @@ impl App {
         let Some(ui) = self.ui.upgrade() else { return };
 
         let Some(premium) = prices::parse_premium(&ui.get_create_premium()) else {
-            self.status("invalid premium, use something like +1% or -0.5%");
+            self.status("invalid premium, use a number like 1 or -0.5");
             return;
         };
         let currency = ui.get_create_currency().to_string();

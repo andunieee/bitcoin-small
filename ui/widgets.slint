@@ -97,6 +97,8 @@ export component Button inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> small;
     callback clicked;
+    // a click while disabled
+    callback disabled-clicked;
     // grows taller when a long label has to wrap
     min-height: max(root.small ? 26px : 32px, t.preferred-height + (root.small ? 8px : 12px));
     min-width: 32px;
@@ -107,12 +109,15 @@ export component Button inherits Rectangle {
     border-color: Palette.border.transparentize(40%);
     opacity: root.enabled ? 1 : 0.5;
     background: (root.primary ? Palette.accent-background : Palette.control-background)
-        .darker(area.pressed ? 0.15 : area.has-hover ? 0.07 : 0);
+        .darker(!root.enabled ? 0 : area.pressed ? 0.15 : area.has-hover ? 0.07 : 0);
     area := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: pointer;
+        mouse-cursor: root.enabled ? MouseCursor.pointer : MouseCursor.default;
         clicked => {
-            root.clicked();
+            if root.enabled {
+                root.clicked();
+            } else {
+                root.disabled-clicked();
+            }
         }
     }
 

@@ -28,6 +28,14 @@ export component CreatePage inherits ScrollView {
     callback toggle-payment(string, bool);
     callback toggle-bitcoin(string, bool);
     callback publish-offer();
+    // why the offer can't be published yet, empty when it can
+    pure callback offer-problem(string, string, string, string, string, string, string, [PayItem], [PayItem]) -> string;
+    // set by clicking the disabled publish button, cleared whenever the problem changes
+    property <bool> show-problem;
+    changed problem => {
+        root.show-problem = false;
+    }
+    property <string> problem: root.offer-problem(root.create-currency, root.create-premium, root.create-amount-min, root.create-amount-max, root.create-other-payments, root.create-relays, root.create-publish-relays, root.bitcoin-options, root.payment-options);
 
     content-width: self.visible-width;
 
@@ -80,11 +88,16 @@ export component CreatePage inherits ScrollView {
             LineEdit {
                 width: 80px;
                 text <=> root.create-premium;
-                placeholder-text: "+1%";
+                placeholder-text: "+1";
                 input-type: InputType.text;
                 edited => {
                     root.create-premium-changed();
                 }
+            }
+
+            Text {
+                text: "%";
+                vertical-alignment: center;
             }
         }
 
@@ -288,9 +301,17 @@ export component CreatePage inherits ScrollView {
             }
         }
 
+        if root.show-problem && root.problem != "": Muted {
+            text: root.problem;
+        }
+
         Button {
             text: "Publish offer";
             primary: true;
+            enabled: root.problem == "";
+            disabled-clicked => {
+                root.show-problem = true;
+            }
             clicked => {
                 root.publish-offer();
             }

@@ -25,6 +25,7 @@ On the desktop, for development:
 
 ```sh
 cargo run                 # data goes in ~/.local/share/bitcoin-smol (%APPDATA% on windows), or set $BITCOIN_SMOL_DATA
+                          # the key and settings go in ~/.config/bitcoin-smol, or set $BITCOIN_SMOL_CONFIG
 cargo test
 ```
 

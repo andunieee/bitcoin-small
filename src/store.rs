@@ -5,7 +5,7 @@
 //! browser. the redb databases live on disk, or in the browser's origin private file system.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ritualistic::database::EventDatabase;
 use ritualistic::{Event, Filter, PubKey, RedbEventDatabase, SecretKey, TagQuery};
@@ -57,6 +57,34 @@ impl Files for Dir {
     }
 }
 
+/// the key used to live in the data directory, and so did its backups. move them to the config
+/// directory, unless it already has a key.
+#[cfg(not(target_arch = "wasm32"))]
+fn move_keys(data_dir: &std::path::Path, config_dir: &std::path::Path) {
+    if data_dir == config_dir || config_dir.join("key").exists() || !data_dir.join("key").exists()
+    {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(data_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let ours = name == "key" || (name.starts_with("key.") && name.ends_with(".old"));
+        if !ours {
+            continue;
+        }
+        // not a rename, they may be on different file systems
+        let from = entry.path();
+        let to = config_dir.join(name);
+        match std::fs::copy(&from, &to).and_then(|_| std::fs::remove_file(&from)) {
+            Ok(()) => {}
+            Err(err) => log::error!("failed to move {name} to {}: {err}", config_dir.display()),
+        }
+    }
+}
+
 /// the browser's localStorage, every name under one prefix
 #[cfg(target_arch = "wasm32")]
 pub struct LocalStorage;
@@ -87,7 +115,8 @@ impl Files for LocalStorage {
     }
 }
 
-/// our key is in "key". the bots of the practice market (see `xfk.rs`) keep theirs next to it.
+/// our key is in "key" of the config files. the bots of the practice market (see `xfk.rs`) keep
+/// theirs in the data files.
 pub fn load_or_create_key(files: &dyn Files, name: &str) -> SecretKey {
     if let Some(hex) = files.read(name) {
         if let Ok(sk) = hex.trim().parse::<SecretKey>() {
@@ -127,30 +156,25 @@ pub struct Message {
 pub type Delivery = (String, Option<Result<(), String>>);
 
 /// an ongoing trade with someone. each has its own conversation, see `Conversation::new`
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct Trade {
-    /// pubkey hex of the other side. old states have none, the key was the peer then
-    #[serde(default)]
+    /// pubkey hex of the other side
     pub peer: String,
-    /// the string that makes the conversation of this trade its own, empty for old trades
-    #[serde(default)]
+    /// the string that makes the conversation of this trade its own
     pub trade_id: String,
+    /// whether the ping that started it is in the event database already
+    pub ping_saved: bool,
     /// relays of the offer this trade started from, where both sides publish and listen
     pub relays: Vec<String>,
     pub offer_summary: String,
-    #[serde(default)]
     pub offer_id: Option<String>,
     /// the terms of that offer. the maker learns which offer it is from the taker's messages.
-    #[serde(default)]
     pub offer: Option<OfferTerms>,
     /// as the taker: what we expected a bitcoin to cost when the maker's price arrived, from the
     /// offer's price source and premium
-    #[serde(default)]
     pub price_check: Option<f64>,
     /// messages from before this are left out, they belong to an earlier trade with the same peer
-    #[serde(default)]
     pub started_at: u32,
-    #[serde(default)]
     pub started_by_me: bool,
     pub messages: Vec<Message>,
 }
@@ -165,10 +189,10 @@ pub struct MyOffer {
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct State {
-    /// relays currently in use
+    /// relays currently in use. they are a setting, so they are saved in the config directory
+    /// (settings.json). state.json used to hold them, which is only read to carry them over.
+    #[serde(default, skip_serializing)]
     pub app_relays: Vec<String>,
-    /// relays shown in the relay menu, enabled or not
-    pub known_relays: Vec<String>,
     /// our nip-65 write relays, where our offers and reviews go too. none until we found our relay
     /// list or published one.
     #[serde(default)]
@@ -176,11 +200,9 @@ pub struct State {
     /// relays of offers we made recently, where we listen for pings
     #[serde(default)]
     pub ping_relays: Vec<String>,
-    /// ids of the rumors we created, the only proof of who said what in a conversation
-    #[serde(default)]
-    pub my_rumors: HashSet<String>,
-    /// conversation pubkey hex -> ongoing trade. past ones go to the history database
-    #[serde(default, alias = "conversations")]
+    /// conversation pubkey hex -> ongoing trade. they are not saved: they are put back together
+    /// from the event database when the app starts, see `Store::load_trades`.
+    #[serde(skip)]
     pub trades: BTreeMap<String, Trade>,
     #[serde(default)]
     pub my_offers: Vec<MyOffer>,
@@ -194,22 +216,36 @@ pub struct State {
     pub recent_offers: Vec<OfferTemplate>,
 }
 
+/// what the settings screen changes, saved apart from the app's data
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Settings {
+    app_relays: Vec<String>,
+}
+
 pub struct Store {
+    /// the app's data
     pub files: Arc<dyn Files>,
+    /// our key and the settings, which belong in the user's config directory
+    pub config: Arc<dyn Files>,
+    /// settings.json as last saved, to write it only when it changes
+    settings_json: Mutex<String>,
     pub state: State,
     pub db: RedbEventDatabase,
+    /// the trades that are over, see `history.rs`
     pub history: History,
 }
 
 impl Store {
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn open(dir: &std::path::Path) -> Self {
+    pub fn open(dir: &std::path::Path, config_dir: &std::path::Path) -> Self {
+        let _ = std::fs::create_dir_all(config_dir);
+        move_keys(dir, config_dir);
         let db = RedbEventDatabase::open(dir.join("events.redb")).expect("failed to open database");
-        let history = redb::Database::create(dir.join("history.redb"))
-            .map_err(|e| e.to_string())
-            .and_then(History::from_database)
-            .expect("failed to open the trade history");
-        Self::new(Arc::new(Dir(dir.to_path_buf())), db, history)
+        Self::new(
+            Arc::new(Dir(dir.to_path_buf())),
+            Arc::new(Dir(config_dir.to_path_buf())),
+            db,
+        )
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -217,19 +253,15 @@ impl Store {
         let db = RedbEventDatabase::open_opfs("events.redb")
             .await
             .expect("failed to open database");
-        let history = match ritualistic::OpfsBackend::open("history.redb").await {
-            Ok(backend) => redb::Database::builder()
-                .create_with_backend(backend)
-                .map_err(|e| e.to_string())
-                .and_then(History::from_database),
-            Err(err) => Err(err.to_string()),
-        }
-        .expect("failed to open the trade history");
-        Self::new(Arc::new(LocalStorage), db, history)
+        Self::new(Arc::new(LocalStorage), Arc::new(LocalStorage), db)
     }
 
-    fn new(files: Arc<dyn Files>, db: RedbEventDatabase, history: History) -> Self {
-        let state = files
+    pub(crate) fn new(
+        files: Arc<dyn Files>,
+        config: Arc<dyn Files>,
+        db: RedbEventDatabase,
+    ) -> Self {
+        let mut state = files
             .read("state.json")
             .and_then(|s| match serde_json::from_str::<State>(&s) {
                 Ok(state) => Some(state),
@@ -245,22 +277,55 @@ impl Store {
             })
             .unwrap_or_else(|| State {
                 app_relays: DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect(),
-                known_relays: DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect(),
                 ..Default::default()
             });
-        Self {
+        let saved = config
+            .read("settings.json")
+            .and_then(|s| serde_json::from_str::<Settings>(&s).ok());
+        let carried_over = saved.is_none();
+        if let Some(saved) = saved {
+            state.app_relays = saved.app_relays;
+        }
+        let store = Self {
             files,
+            config,
+            settings_json: Mutex::new(String::new()),
             state,
+            history: History::new(db.clone(), PubKey([0; 32])),
             db,
-            history,
+        };
+        if carried_over {
+            store.persist_settings();
+        } else {
+            *store.settings_json.lock().unwrap() = store.settings_json();
+        }
+        store
+    }
+
+    fn settings_json(&self) -> String {
+        serde_json::to_string(&Settings {
+            app_relays: self.state.app_relays.clone(),
+        })
+        .unwrap_or_default()
+    }
+
+    fn persist_settings(&self) {
+        let json = self.settings_json();
+        let mut written = self.settings_json.lock().unwrap();
+        if *written == json {
+            return;
+        }
+        match self.config.write("settings.json", &json) {
+            Ok(()) => *written = json,
+            Err(err) => log::error!("failed to save the settings: {err}"),
         }
     }
 
     /// save `new` as our key. the old one stays next to it as `key.<pubkey>.old`, just in case
     pub fn replace_key(&self, old: &SecretKey, new: &SecretKey) -> std::io::Result<()> {
         let backup = format!("key.{}.old", old.pubkey().to_hex());
-        self.files.write(&backup, &old.to_hex())?;
-        self.files.write("key", &new.to_hex())
+        self.config.write(&backup, &old.to_hex())?;
+        self.config.write("key", &new.to_hex())
     }
 
     pub fn persist(&self) {
@@ -270,6 +335,7 @@ impl Store {
         if let Err(err) = res {
             log::error!("failed to persist state: {err}");
         }
+        self.persist_settings();
     }
 
     pub fn save_event(&self, evt: &Event) {
@@ -286,7 +352,7 @@ impl Store {
         }
     }
 
-    fn query(&self, filter: Filter) -> Vec<Event> {
+    pub(crate) fn query(&self, filter: Filter) -> Vec<Event> {
         match self.db.query_events(&mut [filter]) {
             Ok(results) => results
                 .filter_map(|r| rkyv::deserialize::<Event, rkyv::rancor::Error>(&*r).ok())
@@ -319,8 +385,9 @@ impl Store {
 
     /// people whose offers we look for on their own relays too: the ones we labeled and never
     /// reviewed a failed trade with, and the ones our last review about was a success from the last
-    /// six months. never ourselves or someone we blocked.
-    pub fn trusted_people(&self, me: &PubKey, now: u32) -> Vec<PubKey> {
+    /// six months. never ourselves, someone we blocked or one of `ignore`, the bots of the practice
+    /// market, whose reviews are kept like any others.
+    pub fn trusted_people(&self, me: &PubKey, now: u32, ignore: &[PubKey]) -> Vec<PubKey> {
         // subject -> our last review about them
         let mut last: HashMap<PubKey, &Event> = HashMap::new();
         let mut failed: HashSet<PubKey> = HashSet::new();
@@ -352,12 +419,15 @@ impl Store {
                 people.push(pk);
             }
         }
-        people.retain(|pk| pk != me && !self.state.blocked.contains(&pk.to_hex()));
+        people.retain(|pk| {
+            pk != me && !ignore.contains(pk) && !self.state.blocked.contains(&pk.to_hex())
+        });
         people
     }
 
-    /// the people we have reviewed the most successful trades with, best first
-    pub fn top_trade_partners(&self, me: &PubKey, n: usize) -> Vec<PubKey> {
+    /// the people we have reviewed the most successful trades with, best first, not counting
+    /// `ignore`
+    pub fn top_trade_partners(&self, me: &PubKey, n: usize, ignore: &[PubKey]) -> Vec<PubKey> {
         let mine = self.query(Filter {
             kinds: Some(vec![KIND_TRADE_SUCCESS]),
             authors: Some(vec![*me]),
@@ -367,6 +437,7 @@ impl Store {
         for evt in &mine {
             if let Some(pk) = evt.tags.find("p").and_then(|t| t[1].parse::<PubKey>().ok())
                 && pk != *me
+                && !ignore.contains(&pk)
             {
                 *counts.entry(pk).or_default() += 1;
             }
@@ -407,8 +478,8 @@ mod tests {
         let me = SecretKey::generate();
         let mut store = Store::new(
             Arc::new(NoFiles),
+            Arc::new(NoFiles),
             RedbEventDatabase::from_database(memory()).unwrap(),
-            History::from_database(memory()).unwrap(),
         );
         let review = |about: &PubKey, kind: Kind, days_ago: u32| {
             store.save_event(
@@ -438,7 +509,7 @@ mod tests {
         }
         store.state.blocked.insert(blocked.to_hex());
 
-        let mut got = store.trusted_people(&me.pubkey(), now);
+        let mut got = store.trusted_people(&me.pubkey(), now, &[]);
         let mut want = vec![labeled, recent, recovered];
         got.sort_by_key(|pk| pk.to_hex());
         want.sort_by_key(|pk| pk.to_hex());

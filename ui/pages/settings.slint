@@ -1,15 +1,15 @@
 import { LineEdit, ScrollView, Switch } from "std-widgets.slint";
 import { RelayItem } from "../models.slint";
 import { Title, Muted, Button } from "../widgets.slint";
+import { RelayPicker } from "../relay_picker.slint";
 
 export component SettingsPage inherits ScrollView {
     in property <string> npub;
     in property <string> nsec;
     in property <[RelayItem]> relays;
     in-out property <bool> show-reset-identity;
-    callback toggle-relay(string, bool);
-    callback remove-relay(string);
-    callback add-relay(string);
+    callback relay-toggled(string, string, bool);
+    callback relay-added(string, string);
     callback reveal-nsec();
     callback open-profile(string);
     callback import-nsec(string);
@@ -56,42 +56,14 @@ export component SettingsPage inherits ScrollView {
             text: "Relays";
         }
 
-        for relay in root.relays: HorizontalLayout {
-            spacing: 8px;
-            Switch {
-                checked: relay.enabled;
-                toggled => {
-                    root.toggle-relay(relay.url, self.checked);
-                }
+        RelayPicker {
+            id: "settings";
+            items: root.relays;
+            toggled(id, url, on) => {
+                root.relay-toggled(id, url, on);
             }
-
-            Text {
-                text: relay.url;
-                vertical-alignment: center;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-
-            Button {
-                text: "×";
-                clicked => {
-                    root.remove-relay(relay.url);
-                }
-            }
-        }
-
-        HorizontalLayout {
-            spacing: 8px;
-            new-relay := LineEdit {
-                placeholder-text: "wss://…";
-            }
-
-            Button {
-                text: "Add";
-                clicked => {
-                    root.add-relay(new-relay.text);
-                    new-relay.text = "";
-                }
+            added(id, url) => {
+                root.relay-added(id, url);
             }
         }
 

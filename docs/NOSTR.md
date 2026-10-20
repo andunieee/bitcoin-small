@@ -88,7 +88,7 @@ This is a new scheme, not NIP-17 or NIP-04.
    versions) the key is the plain NIP-44 one.
    The key is 32 bytes, so it is also a valid secp256k1 secret key. Its public key is the **conversation pubkey**.
 2. A message starts as an unsigned kind `14` **rumor**, as in NIP-17/NIP-59:
-   `{id, pubkey: <real author>, created_at, kind: 14, tags: [["p", <recipient>], ["e", <offer id>]], content}`.
+   `{id, pubkey: <real author>, created_at, kind: 14, tags: [["p", <recipient>], ["t", <trade id>], ["e", <offer id>]], content}`.
 3. The rumor is NIP-44-encrypted with the conversation key. The result goes into the `content` of a kind `8021` event,
    which is **signed with the conversation key**. So the event's `pubkey` is the conversation pubkey. Its only tag is a
    NIP-40 `["expiration", <created_at + 30 days>]`.
@@ -98,8 +98,8 @@ Consequences:
 
 - **Deniability.** Either party could have signed any message, since both know the conversation key. No message can
   be provably attributed to either side, not even to the other party in the conversation. The only way to know which
-  messages are yours is to remember them, so the app keeps a local cache of the ids of the rumors it created. Any other
-  message in the conversation is from the other party.
+  messages are yours is to remember them, which the app does by keeping its own rumors in its local database (see
+  [Local storage](#local-storage-of-trades)). Any other message in the conversation is from the other party.
 - **Opt-in listening and instant blocking.** To receive messages from someone you subscribe to
   `{"kinds": [8021], "authors": [<conversation pubkey>]}`. You only see DMs from people you chose to listen to.
   Blocking someone just means not making that subscription anymore. Their messages never reach you, and the relay
@@ -124,6 +124,25 @@ ignore it. Messages the app has already received stay in its local cache.
 Kind `28022` is in the ephemeral range, so relays forward pings to live subscribers but don't store them. Until the
 other side has replied, the app sends a fresh ping with each message and waits a moment before publishing the message.
 That gives the other side time to subscribe.
+
+## Local storage of trades
+
+The app keeps nothing about trades outside of its local event database (`events.redb`). A trade is put back together from
+the events that refer to its trade id, with a `["t", <trade id>]` tag:
+
+- **The ping** that started it, saved when the trade starts (the one we sent as the taker, or the first one we got as the
+  maker). Pings carry the id in a `trade` tag, so at startup the app reads the last 200 pings to find the last 200 trades.
+- **The rumors** of the conversation, decrypted, never the encrypted events. A rumor has no id check, signature or
+  trustworthy author, so the app saves it as a kind `14` event whose `pubkey` is whoever it knows wrote it (us or the
+  peer), with the `t` tag added, its id computed again and a blank signature.
+- **Marks**, kind `8023`, notes to ourselves that are never published, signed by nobody. Their tags are
+  `["p", <peer>]`, `["t", <trade id>]` and `["mark", <name>]`, and the names are: `offer` (with `["e", <offer id>]`
+  and, as content, the terms of the offer, which will be gone from the relays by the time we look again),
+  `price-check` (the price we expected, as content), `concluded` and `archived`.
+- **Our reviews** of the trade, which are the public events above.
+
+Where a trade stands comes from the last of its `concluded`, `archived` marks and our own reviews. A trade with none of them
+is ongoing, one concluded and not reviewed is waiting for its review, and one with a review is reviewed.
 
 ## Structured trade messages
 
@@ -158,6 +177,9 @@ When a trade is over, either party can publish a review about the other:
 { "kind": 8022, "tags": [["p", "<other party>"]], "content": "$5 via UPI, fast" }  // success
 { "kind": 8020, "tags": [["p", "<other party>"]], "content": "never paid" }        // failure
 ```
+
+A review about a trade also carries its trade id, `["t", "<trade id>"]`, which is how the app finds the reviews of a
+trade. A review that is not about a trade, like one written from the person's profile, has no such tag.
 
 Reviews are signed with your real key. The app stores them in a local event database and publishes them to your app relays and your write relays.
 

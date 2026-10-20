@@ -1,0 +1,52 @@
+import { LineEdit, CheckBox } from "std-widgets.slint";
+import { RelayItem } from "models.slint";
+import { Button } from "widgets.slint";
+
+// relays as checkboxes, side by side as far as the width allows, and a field that adds a new
+// one already checked. `id` says which list it is, for whoever handles the callbacks.
+export component RelayPicker inherits VerticalLayout {
+    in property <string> id;
+    in property <[RelayItem]> items;
+    callback toggled(string, string, bool);
+    callback added(string, string);
+    property <int> cols: max(1, Math.floor(root.width / 190px));
+    spacing: 4px;
+
+    for row[r] in Math.ceil(root.items.length / root.cols): HorizontalLayout {
+        spacing: 12px;
+        for col in root.cols: Rectangle {
+            horizontal-stretch: 1;
+            height: 32px;
+            if r * root.cols + col < root.items.length: HorizontalLayout {
+                spacing: 2px;
+                CheckBox {
+                    horizontal-stretch: 1;
+                    text: root.items[r * root.cols + col].label;
+                    checked: root.items[r * root.cols + col].enabled;
+                    toggled => {
+                        root.toggled(root.id, root.items[r * root.cols + col].url, self.checked);
+                    }
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        new-relay := LineEdit {
+            placeholder-text: "add a relay, wss://…";
+            accepted => {
+                root.added(root.id, self.text);
+                self.text = "";
+            }
+        }
+
+        Button {
+            text: "Add";
+            clicked => {
+                root.added(root.id, new-relay.text);
+                new-relay.text = "";
+            }
+        }
+    }
+}

@@ -1,6 +1,7 @@
 import { LineEdit, TextEdit, ComboBox, CheckBox, ScrollView, Switch } from "std-widgets.slint";
-import { PayItem } from "../models.slint";
+import { PayItem, RelayItem } from "../models.slint";
 import { Muted, Title, Button, NumberEdit } from "../widgets.slint";
+import { RelayPicker } from "../relay_picker.slint";
 
 export component CreatePage inherits ScrollView {
     in property <[string]> create-currencies;
@@ -16,8 +17,8 @@ export component CreatePage inherits ScrollView {
     in-out property <string> create-amount-max;
     in-out property <bool> create-amount-linked;
     in-out property <string> create-other-payments;
-    in-out property <string> create-relays;
-    in-out property <string> create-publish-relays;
+    in property <[RelayItem]> negotiation-relays;
+    in property <[RelayItem]> publish-relays;
     in-out property <string> create-description;
     in property <string> create-preview;
     in-out property <bool> create-custom;
@@ -28,14 +29,16 @@ export component CreatePage inherits ScrollView {
     callback toggle-payment(string, bool);
     callback toggle-bitcoin(string, bool);
     callback publish-offer();
+    callback relay-toggled(string, string, bool);
+    callback relay-added(string, string);
     // why the offer can't be published yet, empty when it can
-    pure callback offer-problem(string, string, string, string, string, string, string, [PayItem], [PayItem]) -> string;
+    pure callback offer-problem(string, string, string, string, string, [RelayItem], [RelayItem], [PayItem], [PayItem]) -> string;
     // set by clicking the disabled publish button, cleared whenever the problem changes
     property <bool> show-problem;
     changed problem => {
         root.show-problem = false;
     }
-    property <string> problem: root.offer-problem(root.create-currency, root.create-premium, root.create-amount-min, root.create-amount-max, root.create-other-payments, root.create-relays, root.create-publish-relays, root.bitcoin-options, root.payment-options);
+    property <string> problem: root.offer-problem(root.create-currency, root.create-premium, root.create-amount-min, root.create-amount-max, root.create-other-payments, root.negotiation-relays, root.publish-relays, root.bitcoin-options, root.payment-options);
 
     content-width: self.visible-width;
 
@@ -270,9 +273,15 @@ export component CreatePage inherits ScrollView {
                 font-weight: 700;
             }
 
-            LineEdit {
-                text <=> root.create-publish-relays;
-                placeholder-text: "wss://…, comma-separated";
+            RelayPicker {
+                id: "publish";
+                items: root.publish-relays;
+                toggled(id, url, on) => {
+                    root.relay-toggled(id, url, on);
+                }
+                added(id, url) => {
+                    root.relay-added(id, url);
+                }
             }
 
             Muted {
@@ -284,9 +293,15 @@ export component CreatePage inherits ScrollView {
                 font-weight: 700;
             }
 
-            LineEdit {
-                text <=> root.create-relays;
-                placeholder-text: "wss://…, comma-separated";
+            RelayPicker {
+                id: "negotiation";
+                items: root.negotiation-relays;
+                toggled(id, url, on) => {
+                    root.relay-toggled(id, url, on);
+                }
+                added(id, url) => {
+                    root.relay-added(id, url);
+                }
             }
 
             Text {

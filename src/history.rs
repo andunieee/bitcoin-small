@@ -1,15 +1,23 @@
-//! trades that are over: concluded and waiting for a review, reviewed, or just archived. they live in a redb database,
-//! while the ongoing ones live in the json state.
+//! trades are not kept anywhere but in the event database: the ping that started one, the rumors
+//! of its conversation, our notes about it (`protocol::trade_mark`) and our reviews all refer to
+//! its id. at startup the last trades are put back together from those, the ones that are over
+//! as the history and the others as the ongoing ones, which live in memory from then on.
 
-use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+use std::collections::{BTreeMap, HashSet};
 
-use crate::deal::OfferTerms;
-use crate::store::{Message, Trade};
+use ritualistic::database::EventDatabase;
+use ritualistic::{Event, Filter, PubKey, RedbEventDatabase, SecretKey, TagQuery};
 
-/// id -> the past trade, as json
-const TRADES: TableDefinition<u64, &str> = TableDefinition::new("trades");
-/// (ended_at, id), to list the most recent first
-const BY_END: TableDefinition<(u32, u64), ()> = TableDefinition::new("trades_by_end");
+use crate::deal::{self, OfferTerms};
+use crate::protocol::{
+    Conversation, KIND_MARK, KIND_PING, KIND_RUMOR, KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS,
+    MARK_ARCHIVED, MARK_CONCLUDED, MARK_OFFER, MARK_PRICE_CHECK, TRADE_REF, mark_of, ping_trade_id,
+    trade_mark,
+};
+use crate::store::{Message, State, Store, Trade};
+
+/// how many trades, the most recent ones, are brought back when the app starts
+const MAX_TRADES: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -33,28 +41,33 @@ impl Outcome {
     }
 }
 
-/// a review we published about a past trade, and where, to ask those relays to drop it later
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// what the mark of an offer carries, as its content: the offer is long gone from the relays by
+/// the time we want to look at the trade again
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct OfferMark {
+    pub summary: String,
+    pub terms: OfferTerms,
+    pub relays: Vec<String>,
+}
+
+/// a review we published about a past trade
+#[derive(Debug, Clone)]
 pub struct PublishedReview {
     /// event id hex
     pub id: String,
     pub success: bool,
     pub comment: String,
     pub created_at: u32,
-    /// the relays that accepted it
-    pub relays: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PastTrade {
-    /// the key in the database, not stored in the value
-    #[serde(skip)]
-    pub id: i64,
+    /// what ties the events of the trade together, and tells the trades apart
+    pub trade_id: String,
     /// pubkey hex
     pub peer: String,
     pub offer_id: Option<String>,
     pub offer_summary: String,
-    #[serde(default)]
     pub offer: Option<OfferTerms>,
     pub started_at: u32,
     pub started_by_me: bool,
@@ -63,37 +76,66 @@ pub struct PastTrade {
     /// the comment of the review we published, if any
     pub comment: String,
     /// every review we published about it, oldest first. we can change our mind and review again.
-    #[serde(default, alias = "reports")]
     pub reviews: Vec<PublishedReview>,
     pub messages: Vec<Message>,
 }
 
+/// the trades that are over, most recently ended first
 pub struct History {
-    db: Database,
+    db: RedbEventDatabase,
+    me: PubKey,
+    past: Vec<PastTrade>,
 }
 
 impl History {
-    /// a file on disk, or one backed by `ritualistic::OpfsBackend` in the browser
-    pub fn from_database(db: Database) -> Result<Self, String> {
-        // read transactions can't open tables that don't exist yet
-        let txn = db.begin_write().map_err(err)?;
-        txn.open_table(TRADES).map_err(err)?;
-        txn.open_table(BY_END).map_err(err)?;
-        txn.commit().map_err(err)?;
-        Ok(Self { db })
+    pub fn new(db: RedbEventDatabase, me: PubKey) -> Self {
+        Self {
+            db,
+            me,
+            past: vec![],
+        }
     }
 
+    fn insert(&mut self, trade: PastTrade) {
+        let at = self
+            .past
+            .iter()
+            .position(|t| t.ended_at < trade.ended_at)
+            .unwrap_or(self.past.len());
+        self.past.insert(at, trade);
+    }
+
+    fn save(&self, evt: &Event) {
+        match self.db.save_event(evt) {
+            Ok(()) | Err(ritualistic::database::DatabaseError::DuplicateEvent) => {}
+            Err(err) => log::warn!("failed to save event {}: {err}", evt.id),
+        }
+    }
+
+    fn save_mark(&self, peer: &str, trade_id: &str, name: &str) {
+        if let Ok(peer) = peer.parse::<PubKey>() {
+            self.save(&trade_mark(&self.me, &peer, trade_id, name, vec![], ""));
+        }
+    }
+
+    /// a trade that just ended: concluded to be reviewed later, reviewed (the review is added
+    /// with `add_review`) or archived
     pub fn add(
         &mut self,
-        peer: &str,
         trade: &Trade,
         outcome: Outcome,
         comment: &str,
         ended_at: u32,
-    ) -> Result<i64, String> {
-        let past = PastTrade {
-            id: 0,
-            peer: peer.to_string(),
+    ) -> Result<String, String> {
+        let mark = if outcome == Outcome::Archived {
+            MARK_ARCHIVED
+        } else {
+            MARK_CONCLUDED
+        };
+        self.save_mark(&trade.peer, &trade.trade_id, mark);
+        self.insert(PastTrade {
+            trade_id: trade.trade_id.clone(),
+            peer: trade.peer.clone(),
             offer_id: trade.offer_id.clone(),
             offer_summary: trade.offer_summary.clone(),
             offer: trade.offer.clone(),
@@ -104,31 +146,14 @@ impl History {
             comment: comment.to_string(),
             reviews: vec![],
             messages: trade.messages.clone(),
-        };
-        let json = serde_json::to_string(&past).map_err(|e| e.to_string())?;
-
-        let txn = self.db.begin_write().map_err(err)?;
-        let id = {
-            let mut trades = txn.open_table(TRADES).map_err(err)?;
-            let id = match trades.last().map_err(err)? {
-                Some((last, _)) => last.value() + 1,
-                None => 1,
-            };
-            trades.insert(id, json.as_str()).map_err(err)?;
-            txn.open_table(BY_END)
-                .map_err(err)?
-                .insert((ended_at, id), ())
-                .map_err(err)?;
-            id
-        };
-        txn.commit().map_err(err)?;
-        Ok(id as i64)
+        });
+        Ok(trade.trade_id.clone())
     }
 
     /// remember a review we published about a trade. the trade counts as concluded the way the
     /// review says, until it is deleted.
-    pub fn add_review(&self, id: i64, review: PublishedReview) {
-        self.update(id, |t| {
+    pub fn add_review(&mut self, trade_id: &str, review: PublishedReview) {
+        if let Some(t) = self.past.iter_mut().find(|t| t.trade_id == trade_id) {
             t.outcome = if review.success {
                 Outcome::Success
             } else {
@@ -136,205 +161,431 @@ impl History {
             };
             t.comment = review.comment.clone();
             t.reviews.push(review);
-        });
+        }
     }
 
     /// forget one review of a trade and return it. the trade goes by its latest remaining
     /// review, or back to being archived.
-    pub fn remove_review(&self, id: i64, review_id: &str) -> Option<PublishedReview> {
-        let mut removed = None;
-        self.update(id, |t| {
-            if let Some(i) = t.reviews.iter().position(|r| r.id == review_id) {
-                removed = Some(t.reviews.remove(i));
+    pub fn remove_review(&mut self, trade_id: &str, review_id: &str) -> Option<PublishedReview> {
+        let t = self.past.iter_mut().find(|t| t.trade_id == trade_id)?;
+        let removed = t
+            .reviews
+            .iter()
+            .position(|r| r.id == review_id)
+            .map(|i| t.reviews.remove(i));
+        match t.reviews.last() {
+            Some(last) => {
+                t.outcome = if last.success {
+                    Outcome::Success
+                } else {
+                    Outcome::Failure
+                };
+                t.comment = last.comment.clone();
             }
-            match t.reviews.last() {
-                Some(last) => {
-                    t.outcome = if last.success {
-                        Outcome::Success
-                    } else {
-                        Outcome::Failure
-                    };
-                    t.comment = last.comment.clone();
-                }
-                None => {
-                    t.outcome = Outcome::Archived;
-                    t.comment.clear();
-                }
+            None => {
+                t.outcome = Outcome::Archived;
+                t.comment.clear();
+                let (peer, trade_id) = (t.peer.clone(), t.trade_id.clone());
+                self.save_mark(&peer, &trade_id, MARK_ARCHIVED);
             }
-        });
+        }
         removed
     }
 
     /// put a trade away without a review
-    pub fn archive(&self, id: i64) {
-        self.update(id, |t| t.outcome = Outcome::Archived);
-    }
-
-    fn update(&self, id: i64, f: impl FnOnce(&mut PastTrade)) {
-        let res = (|| {
-            let txn = self.db.begin_write().map_err(err)?;
-            {
-                let mut trades = txn.open_table(TRADES).map_err(err)?;
-                let json = trades
-                    .get(id as u64)
-                    .map_err(err)?
-                    .map(|j| j.value().to_string());
-                if let Some(mut t) = json.and_then(|j| past_trade(id as u64, &j)) {
-                    f(&mut t);
-                    let json = serde_json::to_string(&t).map_err(|e| e.to_string())?;
-                    trades.insert(id as u64, json.as_str()).map_err(err)?;
-                }
-            }
-            txn.commit().map_err(err)
-        })();
-        if let Err(e) = res {
-            log::error!("failed to update past trade {id}: {e}");
-        }
+    pub fn archive(&mut self, trade_id: &str) {
+        let Some(t) = self.past.iter_mut().find(|t| t.trade_id == trade_id) else {
+            return;
+        };
+        t.outcome = Outcome::Archived;
+        let (peer, trade_id) = (t.peer.clone(), t.trade_id.clone());
+        self.save_mark(&peer, &trade_id, MARK_ARCHIVED);
     }
 
     /// most recently ended first
     pub fn list(&self, limit: usize) -> Vec<PastTrade> {
-        let res = (|| {
-            let txn = self.db.begin_read().map_err(err)?;
-            let trades = txn.open_table(TRADES).map_err(err)?;
-            let by_end = txn.open_table(BY_END).map_err(err)?;
-            let mut list = vec![];
-            for entry in by_end.iter().map_err(err)?.rev().take(limit) {
-                let (_, id) = entry.map_err(err)?.0.value();
-                if let Some(json) = trades.get(id).map_err(err)? {
-                    list.extend(past_trade(id, json.value()));
-                }
-            }
-            Ok::<_, String>(list)
-        })();
-        res.unwrap_or_else(|e| {
-            log::error!("failed to read past trades: {e}");
-            vec![]
-        })
+        self.past.iter().take(limit).cloned().collect()
     }
 
-    /// whether any past trade is like `f` says, stopping at the first one
+    /// whether any past trade is like `f` says
     pub fn any(&self, f: impl Fn(&PastTrade) -> bool) -> bool {
-        let Ok(txn) = self.db.begin_read() else {
-            return false;
-        };
-        let Ok(trades) = txn.open_table(TRADES) else {
-            return false;
-        };
-        let Ok(iter) = trades.iter() else {
-            return false;
-        };
-        iter.flatten()
-            .any(|(id, json)| past_trade(id.value(), json.value()).is_some_and(|t| f(&t)))
+        self.past.iter().any(f)
     }
 
     /// the most recently ended trade that is like `f` says
     pub fn latest(&self, f: impl Fn(&PastTrade) -> bool) -> Option<PastTrade> {
-        let txn = self.db.begin_read().ok()?;
-        let trades = txn.open_table(TRADES).ok()?;
-        let by_end = txn.open_table(BY_END).ok()?;
-        for entry in by_end.iter().ok()?.rev().flatten() {
-            let (_, id) = entry.0.value();
-            if let Some(t) = trades
-                .get(id)
-                .ok()
-                .flatten()
-                .and_then(|json| past_trade(id, json.value()))
-                && f(&t)
-            {
-                return Some(t);
+        self.past.iter().find(|t| f(t)).cloned()
+    }
+
+    pub fn get(&self, trade_id: &str) -> Option<PastTrade> {
+        self.past.iter().find(|t| t.trade_id == trade_id).cloned()
+    }
+
+    /// forget a trade: its ping, its rumors and our notes. the reviews we published stay, they
+    /// are about the person.
+    pub fn delete(&mut self, trade_id: &str) {
+        let Some(i) = self.past.iter().position(|t| t.trade_id == trade_id) else {
+            return;
+        };
+        let trade = self.past.remove(i);
+        let query = |filter: Filter| -> Vec<Event> {
+            self.db
+                .query_events(&mut [filter])
+                .map(|r| {
+                    r.filter_map(|r| rkyv::deserialize::<Event, rkyv::rancor::Error>(&*r).ok())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let mut doomed = query(Filter {
+            tags: Some(vec![TagQuery(TRADE_REF.into(), vec![trade.trade_id.clone()])]),
+            ..Default::default()
+        });
+        doomed.retain(|e| e.kind != KIND_TRADE_SUCCESS && e.kind != KIND_TRADE_FAILURE);
+        doomed.extend(
+            query(Filter {
+                kinds: Some(vec![KIND_PING]),
+                ..Default::default()
+            })
+            .into_iter()
+            .filter(|e| ping_trade_id(e) == trade.trade_id),
+        );
+        for evt in doomed {
+            if let Err(err) = self.db.delete_event(evt.id.short()) {
+                log::warn!("failed to forget event {}: {err}", evt.id);
             }
         }
-        None
     }
+}
 
-    pub fn get(&self, id: i64) -> Option<PastTrade> {
-        let txn = self.db.begin_read().ok()?;
-        let json = txn.open_table(TRADES).ok()?.get(id as u64).ok()??;
-        past_trade(id as u64, json.value())
-    }
+/// where a trade stands, by the last thing that happened to it
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Standing {
+    Concluded,
+    Archived,
+    Reviewed(bool),
+}
 
-    pub fn delete(&self, id: i64) {
-        let res = (|| {
-            let txn = self.db.begin_write().map_err(err)?;
-            {
-                let mut trades = txn.open_table(TRADES).map_err(err)?;
-                let removed = trades.remove(id as u64).map_err(err)?;
-                if let Some(t) = removed.and_then(|json| past_trade(id as u64, json.value())) {
-                    txn.open_table(BY_END)
-                        .map_err(err)?
-                        .remove((t.ended_at, id as u64))
-                        .map_err(err)?;
+impl Store {
+    /// put the last trades back together from the event database: the ones that are over go to
+    /// the history, the others are the ongoing ones. `relays_for` says where a trade with
+    /// no offer behind it talks.
+    pub fn load_trades(
+        &mut self,
+        sk: &SecretKey,
+        relays_for: impl Fn(&State, &Trade) -> Vec<String>,
+    ) {
+        let me = sk.pubkey();
+        self.history = History::new(self.db.clone(), me);
+        self.state.trades.clear();
+
+        let pings = self.query(Filter {
+            kinds: Some(vec![KIND_PING]),
+            limit: Some(MAX_TRADES),
+            ..Default::default()
+        });
+        let mut seen = HashSet::new();
+        let mut ongoing = BTreeMap::new();
+        let mut over = vec![];
+        for ping in pings {
+            let trade_id = ping_trade_id(&ping);
+            if trade_id.is_empty() || !seen.insert(trade_id.clone()) {
+                continue;
+            }
+            let started_by_me = ping.pubkey == me;
+            let peer = if started_by_me {
+                ping.tags.find("p").and_then(|t| t[1].parse::<PubKey>().ok())
+            } else {
+                Some(ping.pubkey)
+            };
+            let Some(peer) = peer else { continue };
+
+            let mut events = self.query(Filter {
+                tags: Some(vec![TagQuery(TRADE_REF.into(), vec![trade_id.clone()])]),
+                ..Default::default()
+            });
+            events.sort_by_key(|e| e.created_at);
+
+            let mut trade = Trade {
+                peer: peer.to_hex(),
+                trade_id: trade_id.clone(),
+                started_at: ping.created_at.0,
+                started_by_me,
+                ping_saved: true,
+                ..Default::default()
+            };
+            let mut offer = None;
+            let mut standing: Vec<(u32, Standing)> = vec![];
+            let mut reviews = vec![];
+            for evt in &events {
+                let at = evt.created_at.0;
+                if evt.kind == KIND_RUMOR {
+                    trade.messages.push(Message {
+                        id: evt.id.to_hex(),
+                        created_at: at,
+                        mine: evt.pubkey == me,
+                        text: evt.content.clone(),
+                        action: evt.tags.find(deal::TAG).cloned(),
+                        event: evt.to_string(),
+                        deliveries: vec![],
+                    });
+                } else if evt.kind == KIND_MARK {
+                    match mark_of(evt) {
+                        Some(MARK_OFFER) => {
+                            offer = serde_json::from_str::<OfferMark>(&evt.content).ok().map(|m| {
+                                (m, evt.tags.find("e").map(|t| t[1].clone()))
+                            });
+                        }
+                        Some(MARK_PRICE_CHECK) => trade.price_check = evt.content.parse().ok(),
+                        Some(MARK_CONCLUDED) => standing.push((at, Standing::Concluded)),
+                        Some(MARK_ARCHIVED) => standing.push((at, Standing::Archived)),
+                        _ => {}
+                    }
+                } else if (evt.kind == KIND_TRADE_SUCCESS || evt.kind == KIND_TRADE_FAILURE)
+                    && evt.pubkey == me
+                {
+                    let success = evt.kind == KIND_TRADE_SUCCESS;
+                    standing.push((at, Standing::Reviewed(success)));
+                    reviews.push(PublishedReview {
+                        id: evt.id.to_hex(),
+                        success,
+                        comment: evt.content.clone(),
+                        created_at: at,
+                    });
                 }
             }
-            txn.commit().map_err(err)
-        })();
-        if let Err(e) = res {
-            log::error!("failed to delete past trade {id}: {e}");
+            match offer {
+                Some((mark, offer_id)) => {
+                    trade.offer_summary = mark.summary;
+                    trade.offer = Some(mark.terms);
+                    trade.offer_id = offer_id;
+                    trade.relays = mark.relays;
+                }
+                None => {
+                    trade.offer_summary = if started_by_me {
+                        "· direct chat".into()
+                    } else {
+                        "pinged you about your offer".into()
+                    };
+                }
+            }
+            if trade.relays.is_empty() {
+                trade.relays = relays_for(&self.state, &trade);
+            }
+
+            // the last thing that happened to it, and of those that happened together, the one
+            // that came after the others
+            let Some(&(_, last)) = standing.iter().max_by_key(|(at, s)| (*at, *s)) else {
+                ongoing.insert(Conversation::new(sk, peer, &trade_id).pubkey().to_hex(), trade);
+                continue;
+            };
+            let ended_at = standing
+                .iter()
+                .filter(|(_, s)| matches!(s, Standing::Concluded | Standing::Archived))
+                .map(|(at, _)| *at)
+                .min()
+                .unwrap_or(standing[0].0);
+            let (outcome, comment) = match last {
+                Standing::Concluded => (Outcome::Concluded, String::new()),
+                Standing::Archived => (Outcome::Archived, String::new()),
+                Standing::Reviewed(success) => (
+                    if success {
+                        Outcome::Success
+                    } else {
+                        Outcome::Failure
+                    },
+                    reviews.last().map(|r| r.comment.clone()).unwrap_or_default(),
+                ),
+            };
+            over.push(PastTrade {
+                trade_id,
+                peer: trade.peer,
+                offer_id: trade.offer_id,
+                offer_summary: trade.offer_summary,
+                offer: trade.offer,
+                started_at: trade.started_at,
+                started_by_me,
+                ended_at,
+                outcome,
+                comment,
+                reviews,
+                messages: trade.messages,
+            });
         }
+        // oldest first, so that inserting keeps them in order of ending
+        over.sort_by_key(|t| t.ended_at);
+        for t in over {
+            self.history.insert(t);
+        }
+        self.state.trades = ongoing;
     }
-}
-
-fn past_trade(id: u64, json: &str) -> Option<PastTrade> {
-    let mut t: PastTrade = serde_json::from_str(json)
-        .inspect_err(|e| log::warn!("unreadable past trade {id}: {e}"))
-        .ok()?;
-    t.id = id as i64;
-    Some(t)
-}
-
-fn err(e: impl Into<redb::Error>) -> String {
-    e.into().to_string()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use ritualistic::Timestamp;
+
     use super::*;
+    use crate::protocol::{Rumor, ping, trade_mark_at, trade_review};
+    use crate::store::Files;
+
+    struct NoFiles;
+
+    impl Files for NoFiles {
+        fn read(&self, _: &str) -> Option<String> {
+            None
+        }
+
+        fn write(&self, _: &str, _: &str) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn store() -> Store {
+        let db = redb::Database::builder()
+            .create_with_backend(redb::backends::InMemoryBackend::new())
+            .unwrap();
+        Store::new(
+            Arc::new(NoFiles),
+            Arc::new(NoFiles),
+            RedbEventDatabase::from_database(db).unwrap(),
+        )
+    }
+
+    /// a trade the way the app saves it: the ping and the messages, first from us, then from them
+    fn start(store: &Store, me: &SecretKey, peer: &SecretKey, id: &str, texts: &[&str]) {
+        store.save_event(&ping(me, &peer.pubkey(), id));
+        let conv = Conversation::new(me, peer.pubkey(), id);
+        for (i, text) in texts.iter().enumerate() {
+            let (author, to) = if i % 2 == 0 {
+                (me.pubkey(), peer.pubkey())
+            } else {
+                (peer.pubkey(), me.pubkey())
+            };
+            let rumor = Rumor {
+                id: String::new(),
+                pubkey: author.to_hex(),
+                created_at: 1_000 + i as u32,
+                kind: KIND_RUMOR.0,
+                tags: vec![vec!["p".into(), to.to_hex()]],
+                content: text.to_string(),
+            };
+            store.save_event(&conv.local_event(&rumor, &author));
+        }
+    }
+
+    fn mark(store: &Store, me: &SecretKey, peer: &SecretKey, id: &str, name: &str, at: u32) {
+        store.save_event(&trade_mark_at(
+            &me.pubkey(),
+            &peer.pubkey(),
+            id,
+            name,
+            vec![],
+            "",
+            Timestamp(at),
+        ));
+    }
 
     #[test]
-    fn roundtrip() {
-        let mut h = History::from_database(
-            Database::builder()
-                .create_with_backend(redb::backends::InMemoryBackend::new())
-                .unwrap(),
-        )
-        .unwrap();
-        let trade = Trade {
-            offer_summary: "it's a 'quoted' summary".into(),
-            started_at: 10,
-            started_by_me: true,
-            messages: vec![Message {
-                id: "x".into(),
-                created_at: 11,
-                mine: true,
-                text: "hi 'there'".into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        h.add("ab", &trade, Outcome::Success, "fast", 20).unwrap();
-        h.add("cd", &trade, Outcome::Archived, "", 30).unwrap();
-        h.add("ef", &trade, Outcome::Failure, "", 5).unwrap();
-
-        let all = h.list(10);
-        assert_eq!(
-            all.iter().map(|t| t.peer.as_str()).collect::<Vec<_>>(),
-            vec!["cd", "ab", "ef"]
+    fn trades_come_back_from_the_events() {
+        let me = SecretKey::generate();
+        let (a, b, c, d) = (
+            SecretKey::generate(),
+            SecretKey::generate(),
+            SecretKey::generate(),
+            SecretKey::generate(),
         );
-        assert_eq!(all[0].outcome, Outcome::Archived);
-        assert_eq!(all[1].offer_summary, trade.offer_summary);
-        assert_eq!(all[1].messages[0].text, "hi 'there'");
-        assert!(all[1].started_by_me);
-        assert_eq!(all[1].offer_id, None);
-        assert_eq!(h.list(1).len(), 1);
+        let mut store = store();
+        start(&store, &me, &a, "going", &["hi", "hello", "how much?"]);
+        start(&store, &me, &b, "waiting", &["hi"]);
+        start(&store, &me, &c, "dropped", &[]);
+        start(&store, &me, &d, "done", &["hey"]);
+        mark(&store, &me, &b, "waiting", MARK_CONCLUDED, 2_000);
+        mark(&store, &me, &c, "dropped", MARK_ARCHIVED, 3_000);
+        mark(&store, &me, &d, "done", MARK_CONCLUDED, 4_000);
+        // reviewed in the same second as it ended, and by them too, which doesn't count
+        store.save_event(&trade_review(&me, &d.pubkey(), Some("done"), true, "fast"));
+        store.save_event(&trade_review(&d, &me.pubkey(), Some("done"), false, "slow"));
+        // about nobody's trade
+        store.save_event(&trade_review(&me, &a.pubkey(), None, true, "floating"));
 
-        h.delete(all[0].id);
-        assert!(h.get(all[0].id).is_none());
-        assert_eq!(h.get(all[1].id).unwrap().comment, "fast");
-        assert_eq!(h.list(10).len(), 2);
+        store.load_trades(&me, |_, _| vec!["wss://relay.example/".into()]);
 
-        // ids are not reused while there are later ones
-        h.add("gh", &trade, Outcome::Success, "", 40).unwrap();
-        assert_eq!(h.list(1)[0].id, 4);
+        assert_eq!(store.state.trades.len(), 1);
+        let trade = store.state.trades.values().next().unwrap();
+        assert_eq!(trade.peer, a.pubkey().to_hex());
+        assert_eq!(trade.trade_id, "going");
+        assert!(trade.started_by_me && trade.ping_saved);
+        assert_eq!(trade.relays, vec!["wss://relay.example/"]);
+        let texts: Vec<_> = trade.messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(texts, ["hi", "hello", "how much?"]);
+        assert_eq!(
+            trade.messages.iter().map(|m| m.mine).collect::<Vec<_>>(),
+            [true, false, true]
+        );
+        // it is the conversation key that finds it again
+        let key = Conversation::new(&me, a.pubkey(), "going").pubkey().to_hex();
+        assert!(store.state.trades.contains_key(&key));
+
+        let past = store.history.list(10);
+        let by = |peer: &SecretKey| {
+            past.iter()
+                .find(|t| t.peer == peer.pubkey().to_hex())
+                .unwrap()
+        };
+        assert_eq!(past.len(), 3);
+        // the most recently ended first
+        assert_eq!(past[0].peer, d.pubkey().to_hex());
+        assert_eq!(by(&b).outcome, Outcome::Concluded);
+        assert_eq!(by(&c).outcome, Outcome::Archived);
+        assert_eq!(by(&d).outcome, Outcome::Success);
+        assert_eq!(by(&d).comment, "fast");
+        assert_eq!(by(&d).reviews.len(), 1);
+        assert_eq!(by(&d).ended_at, 4_000);
+        assert_eq!(by(&d).messages[0].text, "hey");
+
+        // taking the review back leaves it archived, and that is how it comes back
+        let id = by(&d).trade_id.clone();
+        let review = by(&d).reviews[0].id.clone();
+        assert!(store.history.remove_review(&id, &review).is_some());
+        assert_eq!(store.history.get(&id).unwrap().outcome, Outcome::Archived);
+        store.forget_event(&review.parse().unwrap());
+        store.load_trades(&me, |_, _| vec![]);
+        assert_eq!(
+            store
+                .history
+                .latest(|t| t.trade_id == "done")
+                .unwrap()
+                .outcome,
+            Outcome::Archived
+        );
+
+        // forgetting a trade takes its ping and messages along, and nothing else
+        let id = store.history.latest(|t| t.trade_id == "done").unwrap().trade_id;
+        store.history.delete(&id);
+        store.load_trades(&me, |_, _| vec![]);
+        assert!(store.history.latest(|t| t.trade_id == "done").is_none());
+        assert_eq!(store.history.list(10).len(), 2);
+        assert_eq!(store.state.trades.len(), 1);
+    }
+
+    #[test]
+    fn what_we_save_of_a_rumor_is_ours_or_theirs() {
+        let me = SecretKey::generate();
+        let peer = SecretKey::generate();
+        let conv = Conversation::new(&me, peer.pubkey(), "t1");
+        let (rumor, _) = conv.wrap(&me.pubkey(), "hi", None, None);
+        let ours = conv.local_event(&rumor, &me.pubkey());
+        // our own rumor keeps the id it was sent with, and nobody signed it
+        assert_eq!(ours.id.to_hex(), rumor.id);
+        assert!(!ours.verify_signature());
+        assert!(ours.check_id());
+        // the same rumor read as theirs is another event
+        let theirs = conv.local_event(&rumor, &peer.pubkey());
+        assert_ne!(theirs.id, ours.id);
+        assert!(theirs.check_id());
+        assert_eq!(crate::protocol::trade_of(&theirs), Some("t1"));
     }
 }

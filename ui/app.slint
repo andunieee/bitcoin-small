@@ -60,8 +60,8 @@ export component AppWindow inherits Window {
     // max follows min until it is edited to something else
     in-out property <bool> create-amount-linked: true;
     in-out property <string> create-other-payments;
-    in-out property <string> create-relays;
-    in-out property <string> create-publish-relays;
+    in property <[RelayItem]> negotiation-relays;
+    in property <[RelayItem]> publish-relays;
     in-out property <string> create-description;
     in property <string> create-preview;
     in-out property <bool> create-custom;
@@ -92,7 +92,7 @@ export component AppWindow inherits Window {
     callback close-offer(string);
     callback send-message(string);
     callback trade-pick-amount(string);
-    pure callback offer-problem(string, string, string, string, string, string, string, [PayItem], [PayItem]) -> string;
+    pure callback offer-problem(string, string, string, string, string, [RelayItem], [RelayItem], [PayItem], [PayItem]) -> string;
     callback trade-quote-price(string);
     callback trade-pick-bitcoin(string);
     callback trade-pick-payment(string);
@@ -127,9 +127,9 @@ export component AppWindow inherits Window {
 
     // settings
     in property <[RelayItem]> relays;
-    callback toggle-relay(string, bool);
-    callback remove-relay(string);
-    callback add-relay(string);
+    // which is "settings", "negotiation" or "publish"
+    callback relay-toggled(string, string, bool);
+    callback relay-added(string, string);
     callback reveal-nsec();
     callback open-docs();
     callback import-nsec(string);
@@ -304,8 +304,14 @@ export component AppWindow inherits Window {
                         create-amount-max <=> root.create-amount-max;
                         create-amount-linked <=> root.create-amount-linked;
                         create-other-payments <=> root.create-other-payments;
-                        create-relays <=> root.create-relays;
-                        create-publish-relays <=> root.create-publish-relays;
+                        negotiation-relays: root.negotiation-relays;
+                        publish-relays: root.publish-relays;
+                        relay-toggled(which, url, on) => {
+                            root.relay-toggled(which, url, on);
+                        }
+                        relay-added(which, url) => {
+                            root.relay-added(which, url);
+                        }
                         create-description <=> root.create-description;
                         create-preview: root.create-preview;
                         create-custom <=> root.create-custom;
@@ -451,14 +457,11 @@ export component AppWindow inherits Window {
                         nsec: root.nsec;
                         relays: root.relays;
                         show-reset-identity <=> root.show-reset-identity;
-                        toggle-relay(url, enabled) => {
-                            root.toggle-relay(url, enabled);
+                        relay-toggled(which, url, on) => {
+                            root.relay-toggled(which, url, on);
                         }
-                        remove-relay(url) => {
-                            root.remove-relay(url);
-                        }
-                        add-relay(url) => {
-                            root.add-relay(url);
+                        relay-added(which, url) => {
+                            root.relay-added(which, url);
                         }
                         reveal-nsec => {
                             root.reveal-nsec();

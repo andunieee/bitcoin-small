@@ -134,8 +134,10 @@ pub fn run(out: &Path) -> Result<(), slint::PlatformError> {
     .expect("a platform was already set");
 
     let me = key("me");
-    std::fs::write(data.join("key"), me.to_hex()).expect("failed to write the demo key");
-    let mut store = Store::open(&data);
+    let config = data.join("config");
+    std::fs::create_dir_all(&config).expect("failed to create the demo config dir");
+    std::fs::write(config.join("key"), me.to_hex()).expect("failed to write the demo key");
+    let mut store = Store::open(&data, &config);
     let demo = seed(&mut store, &me);
     let (ui, app) = build(store, true)?;
     *app.offers.lock().unwrap() = demo.offers;
@@ -249,10 +251,13 @@ fn offer_event(sk: &SecretKey, minutes_ago: u32, o: &OfferSpec) -> Event {
 fn review(
     author: &SecretKey,
     subject: &SecretKey,
+    trade: Option<&str>,
     days_ago: u32,
     success: bool,
     comment: &str,
 ) -> Event {
+    let mut tags = vec![vec!["p".into(), subject.pubkey().to_hex()]];
+    tags.extend(trade.map(|t| vec![TRADE_REF.into(), t.to_string()]));
     event(
         author,
         days_ago * 24 * 60,
@@ -261,9 +266,69 @@ fn review(
         } else {
             KIND_TRADE_FAILURE
         },
-        vec![vec!["p".into(), subject.pubkey().to_hex()]],
+        tags,
         comment,
     )
+}
+
+/// put a trade where the app finds it when it starts: its ping and the rumors of the chat, and,
+/// for a trade about an offer, the note about it
+fn save_trade(
+    store: &Store,
+    me: &SecretKey,
+    peer: &SecretKey,
+    trade: &Trade,
+    offer: Option<&Offer>,
+) {
+    let conv = Conversation::new(me, peer.pubkey(), &trade.trade_id);
+    let (from, to) = if trade.started_by_me {
+        (me, peer.pubkey())
+    } else {
+        (peer, me.pubkey())
+    };
+    store.save_event(
+        &EventTemplate {
+            created_at: Timestamp(trade.started_at),
+            kind: KIND_PING,
+            tags: Tags(vec![
+                vec!["p".into(), to.to_hex()],
+                vec!["trade".into(), trade.trade_id.clone()],
+            ]),
+            content: String::new(),
+        }
+        .finalize(from),
+    );
+    for m in &trade.messages {
+        let (author, receiver) = if m.mine {
+            (me.pubkey(), peer.pubkey())
+        } else {
+            (peer.pubkey(), me.pubkey())
+        };
+        let mut tags = vec![vec!["p".to_string(), receiver.to_hex()]];
+        tags.extend(m.action.clone());
+        let rumor = Rumor {
+            id: String::new(),
+            pubkey: author.to_hex(),
+            created_at: m.created_at,
+            kind: KIND_RUMOR.0,
+            tags,
+            content: m.text.clone(),
+        };
+        store.save_event(&conv.local_event(&rumor, &author));
+    }
+    if let Some((offer, terms)) = offer.zip(trade.offer.as_ref()) {
+        store.save_event(&offer_mark_event(&me.pubkey(), &conv, offer, terms, trade));
+    }
+    if let Some(price) = trade.price_check {
+        store.save_event(&trade_mark(
+            &me.pubkey(),
+            &peer.pubkey(),
+            &trade.trade_id,
+            MARK_PRICE_CHECK,
+            vec![],
+            &price.to_string(),
+        ));
+    }
 }
 
 /// a chat line: what someone typed, or one of the deal's structured actions
@@ -464,7 +529,6 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
 
     let s = &mut store.state;
     s.app_relays = RELAYS.iter().map(|r| r.to_string()).collect();
-    s.known_relays = s.app_relays.clone();
     s.my_offers = vec![MyOffer {
         event: events[1].clone(),
         relays: s.app_relays.clone(),
@@ -502,21 +566,19 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
         (Maker, Line::Act(Action::PaymentDetails("lucas.m@example.com".into()))),
     ],
     );
-    s.trades.insert(
-        lucas.pubkey().to_hex(),
-        Trade {
-            peer: lucas.pubkey().to_hex(),
-            trade_id: "demo".into(),
-            relays: featured.relays.clone(),
-            offer_summary: offer_summary(&featured),
-            offer_id: Some(featured.id.to_hex()),
-            offer: Some(terms),
-            price_check: Some(price),
-            started_at: ago(9),
-            started_by_me: true,
-            messages,
-        },
-    );
+    let with_lucas = Trade {
+        peer: lucas.pubkey().to_hex(),
+        trade_id: "demo-lucas".into(),
+        relays: featured.relays.clone(),
+        offer_summary: offer_summary(&featured),
+        offer_id: Some(featured.id.to_hex()),
+        offer: Some(terms),
+        price_check: Some(price),
+        started_at: ago(9),
+        started_by_me: true,
+        messages,
+        ..Default::default()
+    };
 
     // someone answering our own offer
     let terms = OfferTerms::from_offer(&mine, true);
@@ -530,21 +592,21 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
             (Maker, Line::Act(Action::Price(eur.round()))),
         ],
     );
-    s.trades.insert(
-        kofi.pubkey().to_hex(),
-        Trade {
-            peer: kofi.pubkey().to_hex(),
-            trade_id: "demo".into(),
-            relays: mine.relays.clone(),
-            offer_summary: offer_summary(&mine),
-            offer_id: Some(mine.id.to_hex()),
-            offer: Some(terms),
-            price_check: None,
-            started_at: ago(3),
-            started_by_me: false,
-            messages,
-        },
-    );
+    let with_kofi = Trade {
+        peer: kofi.pubkey().to_hex(),
+        trade_id: "demo-kofi".into(),
+        relays: mine.relays.clone(),
+        offer_summary: offer_summary(&mine),
+        offer_id: Some(mine.id.to_hex()),
+        offer: Some(terms),
+        price_check: None,
+        started_at: ago(3),
+        started_by_me: false,
+        messages,
+        ..Default::default()
+    };
+    save_trade(store, me, &lucas, &with_lucas, Some(&featured));
+    save_trade(store, me, &kofi, &with_kofi, Some(&mine));
 
     // past trades, and what we said about them
     let past = [
@@ -556,23 +618,32 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
         (&lucas, 24, true, "$10 via Strike, first trade"),
         (&ana, 30, true, "R$30 PIX"),
     ];
-    for (sk, days, success, comment) in past {
-        let peer = sk.pubkey().to_hex();
+    for (i, (sk, days, success, comment)) in past.into_iter().enumerate() {
         let trade = Trade {
-            offer_summary: "direct chat".into(),
+            peer: sk.pubkey().to_hex(),
+            trade_id: format!("demo-past-{i}"),
             started_at: ago(days * 24 * 60 + 30),
             started_by_me: true,
             ..Default::default()
         };
-        let outcome = if success {
-            Outcome::Success
-        } else {
-            Outcome::Failure
-        };
-        let _ = store
-            .history
-            .add(&peer, &trade, outcome, comment, ago(days * 24 * 60));
-        store.save_event(&review(me, sk, days, success, comment));
+        save_trade(store, me, sk, &trade, None);
+        store.save_event(&trade_mark_at(
+            &me.pubkey(),
+            &sk.pubkey(),
+            &trade.trade_id,
+            MARK_CONCLUDED,
+            vec![],
+            "",
+            Timestamp(ago(days * 24 * 60)),
+        ));
+        store.save_event(&review(
+            me,
+            sk,
+            Some(&trade.trade_id),
+            days,
+            success,
+            comment,
+        ));
     }
 
     // what the people we trust said about lucas
@@ -587,7 +658,7 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
         ),
         (&ana, 51, true, "$10 strike"),
     ] {
-        store.save_event(&review(author, &lucas, days, success, comment));
+        store.save_event(&review(author, &lucas, None, days, success, comment));
     }
     store.persist();
 

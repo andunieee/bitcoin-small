@@ -18,6 +18,19 @@ pub const KIND_DELETION: Kind = Kind(5);
 pub const KIND_RUMOR: Kind = Kind(14);
 pub const KIND_TRADE_FAILURE: Kind = Kind(8020);
 pub const KIND_TRADE_SUCCESS: Kind = Kind(8022);
+/// a note to ourselves about a trade, like that we concluded it. these are never published, they
+/// only live in our own event database. see `trade_mark`.
+pub const KIND_MARK: Kind = Kind(8023);
+
+/// the tag that ties an event to a trade: our rumors, our marks and our reviews carry the id of
+/// the trade (see `Conversation::new`) in it. a single letter so that the database indexes it.
+pub const TRADE_REF: &str = "t";
+
+/// what a mark says about its trade
+pub const MARK_OFFER: &str = "offer";
+pub const MARK_PRICE_CHECK: &str = "price-check";
+pub const MARK_CONCLUDED: &str = "concluded";
+pub const MARK_ARCHIVED: &str = "archived";
 /// nip-65 relay list
 pub const KIND_RELAY_LIST: Kind = Kind(10002);
 
@@ -310,6 +323,9 @@ impl Conversation {
         extra: Option<Vec<String>>,
     ) -> (Rumor, Event) {
         let mut tags = vec![vec!["p".to_string(), self.peer.to_hex()]];
+        if !self.trade.is_empty() {
+            tags.push(vec![TRADE_REF.into(), self.trade.clone()]);
+        }
         if let Some(offer) = offer {
             tags.push(vec!["e".into(), offer.to_hex()]);
         }
@@ -344,6 +360,27 @@ impl Conversation {
         .finalize(&self.signer);
 
         (rumor, evt)
+    }
+
+    /// the rumor as we keep it in our database: an event by `author` (it is either us or the peer,
+    /// the rumor can't prove which), tied to this trade and with a blank signature, as nobody
+    /// signed it. the id is computed again, so it only matches the rumor's when that was ours.
+    pub fn local_event(&self, rumor: &Rumor, author: &PubKey) -> Event {
+        let mut tags = rumor.tags.clone();
+        if !self.trade.is_empty()
+            && !tags
+                .iter()
+                .any(|t| t.len() >= 2 && t[0] == TRADE_REF && t[1] == self.trade)
+        {
+            tags.push(vec![TRADE_REF.into(), self.trade.clone()]);
+        }
+        unsigned_event(
+            author,
+            Timestamp(rumor.created_at),
+            Kind(rumor.kind),
+            tags,
+            rumor.content.clone(),
+        )
     }
 
     pub fn unwrap(&self, evt: &Event) -> Option<Rumor> {
@@ -394,6 +431,72 @@ impl Rumor {
     }
 }
 
+/// an event nobody signed, with its id computed and a blank signature. these are for our own
+/// database only, never to be published.
+pub fn unsigned_event(
+    author: &PubKey,
+    created_at: Timestamp,
+    kind: Kind,
+    tags: Vec<Vec<String>>,
+    content: String,
+) -> Event {
+    let mut evt = Event {
+        id: ID::from_bytes([0; 32]),
+        pubkey: *author,
+        created_at,
+        kind,
+        tags: Tags(tags),
+        content,
+        sig: ritualistic::Signature::from_bytes([0; 64]),
+    };
+    evt.id = ID::from_bytes(sha256(&evt.serialize()));
+    evt
+}
+
+/// a note to ourselves about the trade `trade` with `peer`: `name` is one of the `MARK_*`, `extra`
+/// are more tags and `content` whatever the mark needs. never published.
+pub fn trade_mark(
+    me: &PubKey,
+    peer: &PubKey,
+    trade: &str,
+    name: &str,
+    extra: Vec<Vec<String>>,
+    content: &str,
+) -> Event {
+    trade_mark_at(me, peer, trade, name, extra, content, now())
+}
+
+/// `trade_mark` at a time that is not now
+pub fn trade_mark_at(
+    me: &PubKey,
+    peer: &PubKey,
+    trade: &str,
+    name: &str,
+    extra: Vec<Vec<String>>,
+    content: &str,
+    created_at: Timestamp,
+) -> Event {
+    let mut tags = vec![
+        vec!["p".into(), peer.to_hex()],
+        vec![TRADE_REF.into(), trade.to_string()],
+        vec!["mark".into(), name.to_string()],
+    ];
+    tags.extend(extra);
+    unsigned_event(me, created_at, KIND_MARK, tags, content.to_string())
+}
+
+/// the trade an event refers to, if it does
+pub fn trade_of(evt: &Event) -> Option<&str> {
+    evt.tags.find(TRADE_REF).map(|t| t[1].as_str())
+}
+
+/// what a mark says, if `evt` is one
+pub fn mark_of(evt: &Event) -> Option<&str> {
+    (evt.kind == KIND_MARK)
+        .then(|| evt.tags.find("mark").map(|t| t[1].as_str()))
+        .flatten()
+}
+
 /// the longest trade string we accept in a ping
 const MAX_TRADE_ID: usize = 64;
 
@@ -441,7 +544,18 @@ pub fn deletion(me: &SecretKey, id: &ID, kind: Kind) -> Event {
     .finalize(me)
 }
 
-pub fn trade_review(me: &SecretKey, peer: &PubKey, success: bool, comment: &str) -> Event {
+/// `trade` is the id of the trade it is about, none for a review that is not about one
+pub fn trade_review(
+    me: &SecretKey,
+    peer: &PubKey,
+    trade: Option<&str>,
+    success: bool,
+    comment: &str,
+) -> Event {
+    let mut tags = vec![vec!["p".into(), peer.to_hex()]];
+    if let Some(trade) = trade.filter(|t| !t.is_empty()) {
+        tags.push(vec![TRADE_REF.into(), trade.to_string()]);
+    }
     EventTemplate {
         created_at: now(),
         kind: if success {
@@ -449,7 +563,7 @@ pub fn trade_review(me: &SecretKey, peer: &PubKey, success: bool, comment: &str)
         } else {
             KIND_TRADE_FAILURE
         },
-        tags: Tags(vec![vec!["p".into(), peer.to_hex()]]),
+        tags: Tags(tags),
         content: comment.to_string(),
     }
     .finalize(me)

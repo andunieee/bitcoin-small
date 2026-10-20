@@ -12,13 +12,13 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::deal::{self, Action, Deal, OfferTerms, Role, Step};
 use crate::form::{self, OfferTemplate};
-use crate::history::{Outcome, PastTrade, PublishedReview};
+use crate::history::{OfferMark, Outcome, PastTrade, PublishedReview};
 use crate::prices::{self, PriceApi, fiat, thousands};
 use crate::protocol::*;
 use crate::relays::{MemoryRelay, Occurrence, Relays, Router};
 use crate::store::{
     DEFAULT_WRITE_RELAYS, Delivery, ENOUGH_OWN_REVIEWS, Message, MyOffer, Store,
-    TRUSTED_PEERS_TO_ASK, Trade,
+    State, TRUSTED_PEERS_TO_ASK, Trade,
 };
 use crate::xfk;
 use crate::{
@@ -59,12 +59,12 @@ impl Drop for LiveSub {
 }
 
 /// the trade shown in the trade view
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum TradeRef {
-    /// keyed by the pubkey of its conversation, in the json state
+    /// keyed by the pubkey of its conversation
     Ongoing(PubKey),
-    /// keyed by its row in the history database
-    Past(i64),
+    /// keyed by its trade id
+    Past(String),
 }
 
 /// something we published this session, with each relay's answer
@@ -136,12 +136,18 @@ struct App {
     popup: Mutex<Vec<Report>>,
     /// held while looking up or creating our relay list, so we don't publish two
     finding_write_relays: tokio::sync::Mutex<()>,
+    /// relays typed into a relay picker or unchecked in one, listed again (unchecked) until the
+    /// app closes
+    session_relays: Mutex<Vec<String>>,
     /// for the screenshots: nothing is fetched, published or subscribed to
     offline: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run(data_dir: std::path::PathBuf) -> Result<(), slint::PlatformError> {
+pub fn run(
+    data_dir: std::path::PathBuf,
+    config_dir: std::path::PathBuf,
+) -> Result<(), slint::PlatformError> {
     let _ = std::fs::create_dir_all(&data_dir);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -151,7 +157,7 @@ pub fn run(data_dir: std::path::PathBuf) -> Result<(), slint::PlatformError> {
     // must be reachable from the ui thread
     let _guard = rt.enter();
 
-    let ui = start(Store::open(&data_dir))?;
+    let ui = start(Store::open(&data_dir, &config_dir))?;
     ui.run()
 }
 
@@ -174,7 +180,6 @@ fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
     xfk::start(app.xfk_relay.clone(), files);
     app.restart_ping_sub();
     app.watch_practice_market();
-    app.rekey_legacy_trades();
     let keys: Vec<String> = app
         .store
         .lock()
@@ -212,8 +217,8 @@ fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
 }
 
 /// the window and the app behind it, before anything goes to the network
-fn build(store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::PlatformError> {
-    let sk = crate::store::load_or_create_key(&*store.files, "key");
+fn build(mut store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::PlatformError> {
+    let sk = crate::store::load_or_create_key(&*store.config, "key");
     let ui = AppWindow::new()?;
     // the screenshots have nothing to keep
     let xfk_relay = Arc::new(MemoryRelay::new(
@@ -221,6 +226,7 @@ fn build(store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::Pl
         (!offline).then(|| store.files.clone()),
     ));
     let xfk_people = xfk::people(&*store.files);
+    store.load_trades(&sk, |state, t| trade_relays(state, t, &xfk_people));
     let practicing = !store
         .state
         .trades
@@ -259,6 +265,7 @@ fn build(store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::Pl
         sent: Mutex::new((vec![], 0)),
         popup: Mutex::new(vec![]),
         finding_write_relays: tokio::sync::Mutex::new(()),
+        session_relays: Mutex::new(vec![]),
         offline,
     });
 
@@ -351,15 +358,15 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     });
 
     ui.on_offer_problem(
-        |currency, premium, min, max, other, relays, publish_relays, bitcoin, payment| {
+        |currency, premium, min, max, other, negotiation, publish, bitcoin, payment| {
             offer_problem(
                 &currency,
                 &premium,
                 &min,
                 &max,
                 &other,
-                &relays,
-                &publish_relays,
+                &negotiation,
+                &publish,
                 &bitcoin,
                 &payment,
             )
@@ -391,9 +398,7 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     let a = app.clone();
     ui.on_open_past_trade(move |id| {
-        if let Ok(id) = id.parse::<i64>() {
-            a.show_trade(TradeRef::Past(id));
-        }
+        a.show_trade(TradeRef::Past(id.to_string()));
     });
 
     let a = app.clone();
@@ -509,49 +514,10 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     ui.on_people_filter_changed(move |_| a.render_people());
 
     let a = app.clone();
-    ui.on_toggle_relay(move |url, enabled| {
-        {
-            let mut store = a.store.lock().unwrap();
-            let relays = &mut store.state.app_relays;
-            relays.retain(|r| r != url.as_str());
-            if enabled {
-                relays.push(url.to_string());
-            }
-            store.persist();
-        }
-        a.relays_changed();
-    });
+    ui.on_relay_toggled(move |which, url, enabled| a.relay_toggled(&which, &url, enabled));
 
     let a = app.clone();
-    ui.on_remove_relay(move |url| {
-        {
-            let mut store = a.store.lock().unwrap();
-            store.state.app_relays.retain(|r| r != url.as_str());
-            store.state.known_relays.retain(|r| r != url.as_str());
-            store.persist();
-        }
-        a.relays_changed();
-    });
-
-    let a = app.clone();
-    ui.on_add_relay(move |url| {
-        let Ok(url) = ritualistic::normalize_url(url.trim()) else {
-            a.status("invalid relay url");
-            return;
-        };
-        let url = url.to_string();
-        {
-            let mut store = a.store.lock().unwrap();
-            if !store.state.known_relays.contains(&url) {
-                store.state.known_relays.push(url.clone());
-            }
-            if !store.state.app_relays.contains(&url) {
-                store.state.app_relays.push(url);
-            }
-            store.persist();
-        }
-        a.relays_changed();
-    });
+    ui.on_relay_added(move |which, url| a.relay_added(&which, &url));
 
     let a = app.clone();
     ui.on_close_sent(move || {
@@ -563,7 +529,7 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     let a = app.clone();
     ui.on_open_message_report(move |id| {
-        let current = *a.current_trade.lock().unwrap();
+        let current = a.current_trade.lock().unwrap().clone();
         if let Some(which) = current {
             a.show_report(Report::Message(which, id.into()), true);
         }
@@ -641,8 +607,8 @@ fn offer_problem(
     min: &str,
     max: &str,
     other_payments: &str,
-    relays: &str,
-    publish_relays: &str,
+    relays: &ModelRc<RelayItem>,
+    publish_relays: &ModelRc<RelayItem>,
     bitcoin: &ModelRc<PayItem>,
     payment: &ModelRc<PayItem>,
 ) -> Option<String> {
@@ -665,20 +631,51 @@ fn offer_problem(
         return Some("pick at least one payment method".into());
     }
     if !xfk::is_xfk(currency) {
-        let usable = |list: &str| {
-            split_list(list)
-                .iter()
-                .filter_map(|r| ritualistic::normalize_url(r).ok())
-                .any(|u| u.to_string() != xfk::RELAY)
-        };
-        if !usable(relays) {
-            return Some("add at least one relay for the negotiation".into());
+        if selected_relays(relays).is_empty() {
+            return Some("pick at least one relay for the negotiation".into());
         }
-        if !usable(publish_relays) {
-            return Some("add at least one relay to publish the offer to".into());
+        if selected_relays(publish_relays).is_empty() {
+            return Some("pick at least one relay to publish the offer to".into());
         }
     }
     None
+}
+
+/// the relays to pick from, the ones in `selected` checked. whatever is selected but unknown is
+/// listed too.
+fn relay_items(candidates: &[String], selected: &[String]) -> ModelRc<RelayItem> {
+    let mut urls: Vec<&String> = candidates.iter().collect();
+    for url in selected {
+        if !urls.contains(&url) {
+            urls.push(url);
+        }
+    }
+    ModelRc::new(VecModel::from(
+        urls.into_iter()
+            .map(|url| relay_item(url, selected.contains(url)))
+            .collect::<Vec<_>>(),
+    ))
+}
+
+fn relay_item(url: &str, enabled: bool) -> RelayItem {
+    RelayItem {
+        url: url.into(),
+        label: url
+            .trim_start_matches("wss://")
+            .trim_start_matches("ws://")
+            .trim_end_matches('/')
+            .into(),
+        enabled,
+    }
+}
+
+/// the relays that are checked
+fn selected_relays(model: &ModelRc<RelayItem>) -> Vec<String> {
+    model
+        .iter()
+        .filter(|r| r.enabled && r.url != xfk::RELAY)
+        .map(|r| r.url.to_string())
+        .collect()
 }
 
 fn checked_names(model: &ModelRc<PayItem>) -> Vec<String> {
@@ -1006,7 +1003,7 @@ impl App {
                     ))
                 }
                 Report::Message(which, id) => {
-                    let m = self.find_message(*which, id)?;
+                    let m = self.find_message(which.clone(), id)?;
                     let note = if m.mine {
                         if m.deliveries.is_empty() {
                             "no record of how the relays took it."
@@ -1083,7 +1080,7 @@ impl App {
                 .cloned(),
             TradeRef::Past(row) => store
                 .history
-                .get(row)?
+                .get(&row)?
                 .messages
                 .into_iter()
                 .find(|m| m.id == id),
@@ -1130,10 +1127,11 @@ impl App {
     }
 
     fn relays_changed(self: &Arc<Self>) {
-        let relays = self.app_relays().join(", ");
+        let known = self.known_relays();
+        let enabled = self.app_relays();
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
             if !xfk::is_xfk(&ui.get_create_currency()) {
-                ui.set_create_publish_relays(relays.into());
+                ui.set_publish_relays(relay_items(&known, &enabled));
             }
         });
         self.render_relays();
@@ -1141,27 +1139,113 @@ impl App {
         self.refresh_offers();
     }
 
+    /// the relays the pickers list: the defaults, the ones in use and whatever came up since the
+    /// app started
+    fn known_relays(&self) -> Vec<String> {
+        let mut known: Vec<String> = crate::store::DEFAULT_RELAYS.iter().map(|r| r.to_string()).collect();
+        let used = self.app_relays();
+        let session = self.session_relays.lock().unwrap().clone();
+        for url in used.into_iter().chain(session) {
+            if !known.contains(&url) {
+                known.push(url);
+            }
+        }
+        known
+    }
+
     fn render_relays(&self) {
-        let (known, enabled) = {
-            let s = &self.store.lock().unwrap().state;
-            let mut known = s.known_relays.clone();
-            for r in &s.app_relays {
-                if !known.contains(r) {
-                    known.push(r.clone());
+        let (known, enabled) = (self.known_relays(), self.app_relays());
+        let _ = self.ui.upgrade_in_event_loop(move |ui| {
+            ui.set_relays(relay_items(&known, &enabled));
+        });
+    }
+
+    /// fill the relay pickers of the new offer form. the practice market has its own relay.
+    fn set_create_relays(&self, ui: &AppWindow, negotiation: &[String], publish: &[String]) {
+        let known = self.known_relays();
+        ui.set_negotiation_relays(relay_items(&known, negotiation));
+        ui.set_publish_relays(relay_items(&known, publish));
+    }
+
+    fn remember_session_relays<'a>(&self, urls: impl Iterator<Item = &'a String>) {
+        let mut session_relays = self.session_relays.lock().unwrap();
+        for url in urls {
+            if !session_relays.contains(url) {
+                session_relays.push(url.clone());
+            }
+        }
+    }
+
+    fn relay_toggled(self: &Arc<Self>, which: &str, url: &str, enabled: bool) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        match which {
+            "settings" => {
+                {
+                    let mut store = self.store.lock().unwrap();
+                    let relays = &mut store.state.app_relays;
+                    relays.retain(|r| r != url);
+                    if enabled {
+                        relays.push(url.to_string());
+                    }
+                    store.persist();
+                }
+                if !enabled {
+                    // stays listed, unchecked
+                    self.remember_session_relays([&url.to_string()].into_iter());
+                }
+                self.relays_changed();
+            }
+            _ => {
+                let model = if which == "publish" {
+                    ui.get_publish_relays()
+                } else {
+                    ui.get_negotiation_relays()
+                };
+                if let Some(idx) = model.iter().position(|r| r.url == url) {
+                    model.set_row_data(idx, relay_item(url, enabled));
                 }
             }
-            (known, s.app_relays.clone())
+        }
+    }
+
+    fn relay_added(self: &Arc<Self>, which: &str, url: &str) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        if url.trim().is_empty() {
+            return;
+        }
+        let Ok(url) = ritualistic::normalize_url(url.trim()) else {
+            self.status("invalid relay url");
+            return;
         };
-        let _ = self.ui.upgrade_in_event_loop(move |ui| {
-            let items: Vec<RelayItem> = known
-                .iter()
-                .map(|url| RelayItem {
-                    url: url.into(),
-                    enabled: enabled.contains(url),
-                })
-                .collect();
-            ui.set_relays(ModelRc::new(VecModel::from(items)));
-        });
+        let url = url.to_string();
+        match which {
+            "settings" => {
+                {
+                    let mut store = self.store.lock().unwrap();
+                    if !store.state.app_relays.contains(&url) {
+                        store.state.app_relays.push(url);
+                    }
+                    store.persist();
+                }
+                self.relays_changed();
+            }
+            _ => {
+                self.remember_session_relays([&url].into_iter());
+                let model = if which == "publish" {
+                    ui.get_publish_relays()
+                } else {
+                    ui.get_negotiation_relays()
+                };
+                match model.iter().position(|r| r.url == url.as_str()) {
+                    Some(idx) => model.set_row_data(idx, relay_item(&url, true)),
+                    None => {
+                        if let Some(vec) = model.as_any().downcast_ref::<VecModel<RelayItem>>() {
+                            vec.push(relay_item(&url, true));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------------------ market
@@ -1230,7 +1314,7 @@ impl App {
     async fn fetch_trusted_offers(self: &Arc<Self>) {
         let people = {
             let store = self.store.lock().unwrap();
-            store.trusted_people(&self.me(), now().0)
+            store.trusted_people(&self.me(), now().0, &self.xfk_people)
         };
         let indexers: Vec<String> = INDEXER_RELAYS.iter().map(|r| r.to_string()).collect();
         let mut added = false;
@@ -1510,7 +1594,7 @@ impl App {
                     (display_name(labels, &peer).into(), key_color(&peer))
                 };
                 rows.push(HistoryItem {
-                    key: t.id.to_string().into(),
+                    key: t.trade_id.clone().into(),
                     peer_name: name,
                     peer_color: color,
                     outcome: t.outcome.as_str().into(),
@@ -1559,8 +1643,7 @@ impl App {
             &self.locale_currency
         };
         let d = form::defaults(&recent, fallback);
-        ui.set_create_relays(d.relays.join(", ").into());
-        ui.set_create_publish_relays(self.app_relays().join(", ").into());
+        self.set_create_relays(ui, &d.relays, &self.app_relays());
         ui.set_create_side(d.side.into());
         ui.set_create_currency(d.currency.clone().into());
         ui.set_create_premium(
@@ -1604,12 +1687,12 @@ impl App {
 
         // the practice market is on a relay of its own, the fields go back to normal after it
         if xfk::is_xfk(currency) {
-            ui.set_create_relays(xfk::RELAY.into());
-            ui.set_create_publish_relays(xfk::RELAY.into());
-        } else if ui.get_create_relays() == xfk::RELAY {
+            let practice = || ModelRc::new(VecModel::from(vec![relay_item(xfk::RELAY, true)]));
+            ui.set_negotiation_relays(practice());
+            ui.set_publish_relays(practice());
+        } else if ui.get_negotiation_relays().iter().any(|r| r.url == xfk::RELAY) {
             let d = form::defaults(&recent, &self.locale_currency);
-            ui.set_create_relays(d.relays.join(", ").into());
-            ui.set_create_publish_relays(self.app_relays().join(", ").into());
+            self.set_create_relays(ui, &d.relays, &self.app_relays());
         }
 
         let (min, max) = match form::default_amount(&recent, currency) {
@@ -1695,30 +1778,23 @@ impl App {
         let relays: Vec<String> = if practice {
             vec![xfk::RELAY.into()]
         } else {
-            split_list(&ui.get_create_relays())
-                .iter()
-                .filter_map(|r| ritualistic::normalize_url(r).ok())
-                .map(|u| u.to_string())
-                .filter(|r| r != xfk::RELAY)
-                .collect()
+            selected_relays(&ui.get_negotiation_relays())
         };
         if relays.is_empty() {
-            self.status("add at least one relay for the negotiation");
+            self.status("pick at least one relay for the negotiation");
             return;
         }
         let publish_to: Vec<String> = if practice {
             vec![xfk::RELAY.into()]
         } else {
-            split_list(&ui.get_create_publish_relays())
-                .iter()
-                .filter_map(|r| ritualistic::normalize_url(r).ok())
-                .map(|u| u.to_string())
-                .filter(|r| r != xfk::RELAY)
-                .collect()
+            selected_relays(&ui.get_publish_relays())
         };
         if publish_to.is_empty() {
-            self.status("add at least one relay to publish the offer to");
+            self.status("pick at least one relay to publish the offer to");
             return;
+        }
+        if !practice {
+            self.remember_session_relays(relays.iter().chain(&publish_to));
         }
 
         let template = OfferTemplate {
@@ -1927,10 +2003,11 @@ impl App {
                         offer_summary: "pinged you about your offer".into(),
                         started_at: evt.created_at.0,
                         started_by_me: false,
+                        ping_saved: true,
                         ..Default::default()
                     },
                 );
-                store.persist();
+                store.save_event(&evt);
             }
             is_new
         };
@@ -1996,13 +2073,9 @@ impl App {
             return;
         };
         let mut new_pair = None;
+        let mut offer_mark = None;
         let shown = {
             let mut store = self.store.lock().unwrap();
-            // whoever signed this could have been either of us: only our local memory of the rumors
-            // we created tells us which ones are ours
-            if store.state.my_rumors.contains(&rumor.id) {
-                return;
-            }
             // the taker's messages point at the offer they took, which is how we, the maker,
             // learn which of our offers this trade is about
             let offer = rumor
@@ -2020,7 +2093,14 @@ impl App {
             let Some(t) = store.state.trades.get_mut(&conv.pubkey().to_hex()) else {
                 return;
             };
-            if t.messages.iter().any(|m| m.id == rumor.id)
+            // whoever signed this could have been either of us, the rumor can't say. our own
+            // messages are in the trade already, which is how we know them when the relays send
+            // them back.
+            let theirs = conv.local_event(&rumor, &conv.peer);
+            let ours = conv.local_event(&rumor, &self.me());
+            if t.messages
+                .iter()
+                .any(|m| m.id == ours.id.to_hex() || m.id == theirs.id.to_hex())
                 || rumor.created_at < t.started_at.saturating_sub(start_slack(t))
             {
                 return;
@@ -2030,7 +2110,9 @@ impl App {
             {
                 t.offer_id = Some(offer.id.to_hex());
                 t.offer_summary = offer_summary(&offer);
-                t.offer = Some(OfferTerms::from_offer(&offer, true));
+                let terms = OfferTerms::from_offer(&offer, true);
+                offer_mark = Some(offer_mark_event(&self.me(), conv, &offer, &terms, t));
+                t.offer = Some(terms);
                 new_pair = Some((offer.currency, offer.price_api));
             }
             let action = rumor
@@ -2039,12 +2121,12 @@ impl App {
                 .find(|t| t.first().is_some_and(|n| n == deal::TAG))
                 .cloned();
             t.messages.push(Message {
-                id: rumor.id.clone(),
+                id: theirs.id.to_hex(),
                 created_at: rumor.created_at,
                 mine: false,
                 text: rumor.content,
                 action,
-                event: evt.to_string(),
+                event: theirs.to_string(),
                 deliveries: vec![],
             });
             t.messages.sort_by_key(|m| m.created_at);
@@ -2052,10 +2134,13 @@ impl App {
                 .messages
                 .iter()
                 .zip(shown_messages(t.offer.as_ref(), &t.messages))
-                .find(|(m, _)| m.id == rumor.id)
+                .find(|(m, _)| m.id == theirs.id.to_hex())
                 .map(|(_, shown)| shown.text);
             let summary = t.offer_summary.clone();
-            store.persist();
+            store.save_event(&theirs);
+            if let Some(mark) = &offer_mark {
+                store.save_event(mark);
+            }
             (shown, summary)
         };
         let name = self.name(&conv.peer);
@@ -2141,8 +2226,16 @@ impl App {
             };
             t.offer_id = Some(offer.id.to_hex());
             t.offer_summary = offer_summary(&offer);
-            t.offer = Some(OfferTerms::from_offer(&offer, false));
-            store.persist();
+            let terms = OfferTerms::from_offer(&offer, false);
+            let mark = offer_mark_event(
+                &self.me(),
+                &Conversation::new(&self.sk(), offer.maker, &t.trade_id),
+                &offer,
+                &terms,
+                t,
+            );
+            t.offer = Some(terms);
+            store.save_event(&mark);
             key
         };
         self.ensure_dm_sub(key, true);
@@ -2160,24 +2253,24 @@ impl App {
 
     /// ping the other side of the trade `key`, which tells them how to find its conversation
     fn send_ping(self: &Arc<Self>, key: PubKey) {
-        let Some((peer, trade_id, relays)) = self
-            .store
-            .lock()
-            .unwrap()
-            .state
-            .trades
-            .get(&key.to_hex())
-            .and_then(|t| {
-                Some((
-                    t.peer.parse::<PubKey>().ok()?,
-                    t.trade_id.clone(),
-                    t.relays.clone(),
-                ))
-            })
-        else {
-            return;
+        let (peer, trade_id, relays, evt) = {
+            let mut store = self.store.lock().unwrap();
+            let Some(t) = store.state.trades.get_mut(&key.to_hex()) else {
+                return;
+            };
+            let Ok(peer) = t.peer.parse::<PubKey>() else {
+                return;
+            };
+            let evt = ping(&self.sk(), &peer, &t.trade_id);
+            let (trade_id, relays, saved) = (t.trade_id.clone(), t.relays.clone(), t.ping_saved);
+            t.ping_saved = true;
+            // the first ping is what brings the trade back after a restart
+            if !saved {
+                store.save_event(&evt);
+            }
+            (peer, trade_id, relays, evt)
         };
-        let evt = ping(&self.sk(), &peer, &trade_id);
+        let _ = (peer, trade_id);
         let app = self.clone();
         tokio::spawn(async move {
             app.publish("ping", relays, evt).await;
@@ -2209,32 +2302,6 @@ impl App {
             .filter(|(_, t)| t.peer == hex)
             .filter_map(|(k, _)| k.parse().ok())
             .collect()
-    }
-
-    /// trades from before each had its own conversation were keyed by their peer
-    fn rekey_legacy_trades(&self) {
-        let sk = self.sk();
-        let mut store = self.store.lock().unwrap();
-        let legacy: Vec<String> = store
-            .state
-            .trades
-            .iter()
-            .filter(|(_, t)| t.peer.is_empty())
-            .map(|(k, _)| k.clone())
-            .collect();
-        if legacy.is_empty() {
-            return;
-        }
-        for hex in legacy {
-            let (Some(mut t), Ok(peer)) = (store.state.trades.remove(&hex), hex.parse::<PubKey>())
-            else {
-                continue;
-            };
-            t.peer = hex;
-            let key = Conversation::new(&sk, peer, "").pubkey();
-            store.state.trades.insert(key.to_hex(), t);
-        }
-        store.persist();
     }
 
     /// open the ongoing trade with someone, starting a direct chat if there is none
@@ -2302,7 +2369,7 @@ impl App {
     }
 
     fn render_trade(&self) {
-        let Some(which) = *self.current_trade.lock().unwrap() else {
+        let Some(which) = self.current_trade.lock().unwrap().clone() else {
             return;
         };
         let store = self.store.lock().unwrap();
@@ -2325,7 +2392,7 @@ impl App {
                 )
             }
             TradeRef::Past(id) => {
-                let Some(t) = store.history.get(id) else {
+                let Some(t) = store.history.get(&id) else {
                     return;
                 };
                 let Ok(peer) = t.peer.parse::<PubKey>() else {
@@ -2339,7 +2406,6 @@ impl App {
                         success: r.success,
                         comment: r.comment.clone().into(),
                         time: ago(Timestamp(r.created_at)).into(),
-                        relays: r.relays.len() as i32,
                     })
                     .collect();
                 let view = TradeView {
@@ -2396,7 +2462,7 @@ impl App {
         if text.is_empty() || text.len() > 8000 {
             return;
         }
-        let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
+        let Some(TradeRef::Ongoing(peer)) = self.current_trade.lock().unwrap().clone() else {
             return;
         };
         self.send(peer, text, None);
@@ -2423,7 +2489,7 @@ impl App {
 
     /// the terms of the offer behind the ongoing trade on screen, if it came from one
     fn current_terms(&self) -> Option<OfferTerms> {
-        let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
+        let Some(TradeRef::Ongoing(peer)) = self.current_trade.lock().unwrap().clone() else {
             return None;
         };
         let store = self.store.lock().unwrap();
@@ -2433,7 +2499,7 @@ impl App {
     /// where the bitcoin of the trade on screen should go, checked for its method, or why it
     /// can't go there
     fn check_bitcoin_details(&self, details: &str) -> Result<String, String> {
-        let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
+        let Some(TradeRef::Ongoing(peer)) = self.current_trade.lock().unwrap().clone() else {
             return Err("no ongoing trade".into());
         };
         let store = self.store.lock().unwrap();
@@ -2450,7 +2516,7 @@ impl App {
 
     /// a structured message in the trade on screen, from a button
     fn send_action(self: &Arc<Self>, action: Action) {
-        let Some(TradeRef::Ongoing(peer)) = *self.current_trade.lock().unwrap() else {
+        let Some(TradeRef::Ongoing(peer)) = self.current_trade.lock().unwrap().clone() else {
             return;
         };
         if self.send_action_to(peer, action, false) {
@@ -2536,10 +2602,20 @@ impl App {
                     };
                     {
                         let mut store = self.store.lock().unwrap();
-                        if let Some(t) = store.state.trades.get_mut(&key.to_hex()) {
+                        let mark = store.state.trades.get_mut(&key.to_hex()).map(|t| {
                             t.price_check = Some(expected);
+                            trade_mark(
+                                &self.me(),
+                                &peer,
+                                &t.trade_id,
+                                MARK_PRICE_CHECK,
+                                vec![],
+                                &expected.to_string(),
+                            )
+                        });
+                        if let Some(mark) = mark {
+                            store.save_event(&mark);
                         }
-                        store.persist();
                     }
                     let off = deal::deviation_pct(quoted, expected);
                     if off > deal::PRICE_TOLERANCE_PCT {
@@ -2574,18 +2650,18 @@ impl App {
         let conv = Conversation::new(&self.sk(), peer, &trade_id);
         let (relays, needs_ping, evt) = {
             let mut store = self.store.lock().unwrap();
-            let state = &mut store.state;
-            let Some(t) = state.trades.get_mut(&key.to_hex()) else {
+            let Some(t) = store.state.trades.get_mut(&key.to_hex()) else {
                 return;
             };
             let offer = t.offer_id.as_deref().and_then(|h| ID::from_hex(h).ok());
             let action = action.map(|a| a.to_tag());
             let (rumor, evt) = conv.wrap(&self.me(), text, offer, action.clone());
+            let local = conv.local_event(&rumor, &self.me());
             // until they answer we keep poking them, as they only start listening after a ping
             let needs_ping = !t.messages.iter().any(|m| !m.mine);
             let relays = t.relays.clone();
             t.messages.push(Message {
-                id: rumor.id.clone(),
+                id: local.id.to_hex(),
                 created_at: rumor.created_at,
                 mine: true,
                 text: rumor.content,
@@ -2593,9 +2669,8 @@ impl App {
                 event: evt.to_string(),
                 deliveries: vec![],
             });
-            state.my_rumors.insert(rumor.id.clone());
-            store.persist();
-            (relays, needs_ping, (rumor.id, evt))
+            store.save_event(&local);
+            (relays, needs_ping, (local.id.to_hex(), evt))
         };
         let (msg_id, evt) = evt;
         self.render_trade();
@@ -2654,11 +2729,11 @@ impl App {
     /// review the trade being looked at: it ends if it is ongoing, and a past one can be reviewed
     /// again, whether it was archived or concluded
     fn conclude_trade(self: &Arc<Self>, outcome: Outcome, comment: &str) {
-        let current = *self.current_trade.lock().unwrap();
+        let current = self.current_trade.lock().unwrap().clone();
         match current {
             Some(TradeRef::Ongoing(_)) => self.end_trade(outcome, comment),
             Some(TradeRef::Past(id)) => {
-                let Some(t) = self.store.lock().unwrap().history.get(id) else {
+                let Some(t) = self.store.lock().unwrap().history.get(&id) else {
                     return;
                 };
                 if let Ok(peer) = t.peer.parse() {
@@ -2675,16 +2750,20 @@ impl App {
 
     /// ask the relays we published one review of this past trade to to drop it
     fn delete_review(self: &Arc<Self>, review_id: &str) {
-        let Some(TradeRef::Past(id)) = *self.current_trade.lock().unwrap() else {
+        let Some(TradeRef::Past(id)) = self.current_trade.lock().unwrap().clone() else {
             return;
         };
-        let Some(review) = ({
-            let store = self.store.lock().unwrap();
-            let review = store.history.remove_review(id, review_id);
+        let Some((review, peer)) = ({
+            let mut store = self.store.lock().unwrap();
+            let peer = store
+                .history
+                .get(&id)
+                .and_then(|t| t.peer.parse::<PubKey>().ok());
+            let review = store.history.remove_review(&id, review_id);
             if let Some(rid) = review.as_ref().and_then(|r| r.id.parse().ok()) {
                 store.forget_event(&rid);
             }
-            review
+            review.zip(peer)
         }) else {
             return;
         };
@@ -2701,7 +2780,8 @@ impl App {
         let evt = deletion(&self.sk(), &rid, kind);
         let app = self.clone();
         tokio::spawn(async move {
-            let (ok, total) = app.publish("review deletion", review.relays, evt).await;
+            let relays = app.review_relays(&peer).await;
+            let (ok, total) = app.publish("review deletion", relays, evt).await;
             app.status(format!("review deleted from {}/{total} relays", ok.len()));
         });
     }
@@ -2709,11 +2789,11 @@ impl App {
     /// put away the trade being looked at without a review: an ongoing one ends, and a concluded
     /// one that was waiting for its review stops waiting
     fn archive_trade(self: &Arc<Self>) {
-        let current = *self.current_trade.lock().unwrap();
+        let current = self.current_trade.lock().unwrap().clone();
         match current {
             Some(TradeRef::Ongoing(_)) => self.end_trade(Outcome::Archived, ""),
             Some(TradeRef::Past(id)) => {
-                self.store.lock().unwrap().history.archive(id);
+                self.store.lock().unwrap().history.archive(&id);
                 self.leave_trade();
             }
             None => {}
@@ -2724,7 +2804,7 @@ impl App {
     /// failure), or just archived. it moves from the json state to the history database and we
     /// stop listening.
     fn end_trade(self: &Arc<Self>, outcome: Outcome, comment: &str) {
-        let Some(TradeRef::Ongoing(key)) = *self.current_trade.lock().unwrap() else {
+        let Some(TradeRef::Ongoing(key)) = self.current_trade.lock().unwrap().clone() else {
             return;
         };
         let (trade_peer, past_id) = {
@@ -2732,10 +2812,7 @@ impl App {
             let Some(trade) = store.state.trades.get(&key.to_hex()).cloned() else {
                 return;
             };
-            let past_id = match store
-                .history
-                .add(&trade.peer, &trade, outcome, comment, now().0)
-            {
+            let past_id = match store.history.add(&trade, outcome, comment, now().0) {
                 Ok(id) => id,
                 Err(err) => {
                     drop(store);
@@ -2744,11 +2821,6 @@ impl App {
                 }
             };
             store.state.trades.remove(&key.to_hex());
-            // nobody listens to this conversation any more, so its rumors need no memory
-            for m in trade.messages.iter().filter(|m| m.mine) {
-                store.state.my_rumors.remove(&m.id);
-            }
-            store.persist();
             (trade.peer, past_id)
         };
         self.dm_subs.lock().unwrap().remove(&key.to_hex());
@@ -2762,10 +2834,10 @@ impl App {
 
     /// forget a trade that is over, concluded or archived, without keeping it anywhere
     fn delete_trade(self: &Arc<Self>) {
-        let Some(TradeRef::Past(id)) = *self.current_trade.lock().unwrap() else {
+        let Some(TradeRef::Past(id)) = self.current_trade.lock().unwrap().clone() else {
             return;
         };
-        self.store.lock().unwrap().history.delete(id);
+        self.store.lock().unwrap().history.delete(&id);
         self.leave_trade();
     }
 
@@ -2844,7 +2916,7 @@ impl App {
             let past_item = |t: &PastTrade| {
                 let pk: PubKey = t.peer.parse().ok()?;
                 Some(TradeItem {
-                    key: t.id.to_string().into(),
+                    key: t.trade_id.clone().into(),
                     peer_name: display_name(&labels, &pk).into(),
                     peer_color: key_color(&pk),
                     summary: t.offer_summary.trim_start_matches("maker ").into(),
@@ -3019,7 +3091,7 @@ impl App {
                 let own = store.reviews_about(&[self.me()], &who);
                 let trusted: Vec<PubKey> = if own.len() < ENOUGH_OWN_REVIEWS {
                     store
-                        .top_trade_partners(&self.me(), TRUSTED_PEERS_TO_ASK + 1)
+                        .top_trade_partners(&self.me(), TRUSTED_PEERS_TO_ASK + 1, &self.xfk_people)
                         .into_iter()
                         .filter(|pk| *pk != who)
                         .take(TRUSTED_PEERS_TO_ASK)
@@ -3119,52 +3191,54 @@ impl App {
         peer: PubKey,
         success: bool,
         comment: &str,
-        past: Option<i64>,
+        past: Option<String>,
     ) {
         if peer == self.me() {
             return;
         }
-        let evt = trade_review(&self.sk(), &peer, success, comment);
-        // what we say about the bots stays in the practice market, and out of whom we trust
-        let practice = self.xfk_people.contains(&peer);
-        if !practice {
-            self.store.lock().unwrap().save_event(&evt);
+        let evt = trade_review(&self.sk(), &peer, past.as_deref(), success, comment);
+        {
+            let mut store = self.store.lock().unwrap();
+            store.save_event(&evt);
+            if let Some(past) = &past {
+                store.history.add_review(
+                    past,
+                    PublishedReview {
+                        id: evt.id.to_hex(),
+                        success,
+                        comment: comment.to_string(),
+                        created_at: evt.created_at.0,
+                    },
+                );
+            }
+        }
+        if let Some(past) = past {
+            self.render_trades();
+            if *self.current_trade.lock().unwrap() == Some(TradeRef::Past(past)) {
+                self.render_trade();
+            }
         }
 
         let app = self.clone();
-        let comment = comment.to_string();
         tokio::spawn(async move {
-            let relays = if practice {
-                vec![xfk::RELAY.into()]
-            } else {
-                let theirs = app.peer_read_relays(&peer).await;
-                let ours = app.my_write_relays(false).await;
-                merge_relays(&merge_relays(&app.app_relays(), &theirs), &ours)
-            };
-            let id = evt.id.to_hex();
-            let created_at = evt.created_at.0;
+            let relays = app.review_relays(&peer).await;
             let (ok, total) = app.publish("trade review", relays, evt).await;
             app.status(format!(
                 "trade review published to {}/{total} relays",
                 ok.len()
             ));
-            if let Some(past) = past {
-                app.store.lock().unwrap().history.add_review(
-                    past,
-                    PublishedReview {
-                        id,
-                        success,
-                        comment,
-                        created_at,
-                        relays: ok,
-                    },
-                );
-                app.render_trades();
-                if *app.current_trade.lock().unwrap() == Some(TradeRef::Past(past)) {
-                    app.render_trade();
-                }
-            }
         });
+    }
+
+    /// where our reviews about `peer` go: our own relays, theirs and the ones for finding people.
+    /// what we say about the bots stays in the practice market.
+    async fn review_relays(self: &Arc<Self>, peer: &PubKey) -> Vec<String> {
+        if self.xfk_people.contains(peer) {
+            return vec![xfk::RELAY.into()];
+        }
+        let theirs = self.peer_read_relays(peer).await;
+        let ours = self.my_write_relays(false).await;
+        merge_relays(&merge_relays(&self.app_relays(), &theirs), &ours)
     }
 
     /// the relays someone reads from (nip-65), none if we can't find their relay list
@@ -3248,6 +3322,52 @@ fn last_trade_currency(store: &Store) -> Option<String> {
 
 /// how far before a trade started its messages are still taken as part of it. none in the
 /// practice market, where everyone is on our clock, and a trade often follows another right away.
+/// the note to ourselves about the offer a trade is about. the offer may be gone from the relays
+/// by the time we look at the trade again, so the mark has all we need of it.
+fn offer_mark_event(
+    me: &PubKey,
+    conv: &Conversation,
+    offer: &Offer,
+    terms: &OfferTerms,
+    t: &Trade,
+) -> Event {
+    let content = OfferMark {
+        summary: offer_summary(offer),
+        terms: terms.clone(),
+        relays: t.relays.clone(),
+    };
+    trade_mark(
+        me,
+        &conv.peer,
+        &conv.trade,
+        MARK_OFFER,
+        vec![vec!["e".into(), offer.id.to_hex()]],
+        &serde_json::to_string(&content).unwrap_or_default(),
+    )
+}
+
+/// where a trade that has no offer behind it talks: the practice market with the bots, our relays
+/// in a chat we started, and where we listen for pings when someone pinged us
+fn trade_relays(state: &State, t: &Trade, xfk_people: &[PubKey]) -> Vec<String> {
+    if t.peer
+        .parse::<PubKey>()
+        .is_ok_and(|peer| xfk_people.contains(&peer))
+    {
+        return vec![xfk::RELAY.into()];
+    }
+    let ping_relays: Vec<String> = state
+        .ping_relays
+        .iter()
+        .filter(|r| *r != xfk::RELAY)
+        .cloned()
+        .collect();
+    if t.started_by_me || ping_relays.is_empty() {
+        state.app_relays.clone()
+    } else {
+        ping_relays
+    }
+}
+
 fn start_slack(t: &Trade) -> u32 {
     if !t.relays.is_empty() && t.relays.iter().all(|r| r == xfk::RELAY) {
         0

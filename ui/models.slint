@@ -1,6 +1,6 @@
 // one row in the recent trades shown on the offer page
 export struct HistoryItem {
-    // the past trade's id, to open it
+    // the past trade's trade id, to open it
     key: string,
     // our name for who we traded with, empty when it is the offer's maker
     peer-name: string,
@@ -33,7 +33,7 @@ export struct OfferItem {
 }
 
 export struct TradeItem {
-    // the peer's npub for an ongoing trade, the history id for a past one
+    // the peer's npub for an ongoing trade, the trade id for a past one
     key: string,
     peer-name: string,
     peer-color: color,
@@ -49,7 +49,6 @@ export struct PastReviewItem {
     success: bool,
     comment: string,
     time: string,
-    relays: int,
 }
 
 export struct TradeView {
@@ -129,6 +128,8 @@ export struct PersonItem {
 
 export struct RelayItem {
     url: string,
+    // the url without the scheme, to fit in a checkbox
+    label: string,
     enabled: bool,
 }
 

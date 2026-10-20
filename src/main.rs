@@ -18,7 +18,27 @@ fn main() -> Result<(), slint::PlatformError> {
     let data_dir = std::env::var_os("BITCOIN_SMOL_DATA")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(default_data_dir);
-    bitcoin_smol::run(data_dir)
+    let config_dir = std::env::var_os("BITCOIN_SMOL_CONFIG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(default_config_dir);
+    bitcoin_smol::run(data_dir, config_dir)
+}
+
+// there is no separate place for the config on windows
+#[cfg(windows)]
+fn default_config_dir() -> std::path::PathBuf {
+    default_data_dir()
+}
+
+#[cfg(all(not(windows), not(target_arch = "wasm32")))]
+fn default_config_dir() -> std::path::PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|d| !d.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
+        })
+        .join("bitcoin-smol")
 }
 
 #[cfg(windows)]

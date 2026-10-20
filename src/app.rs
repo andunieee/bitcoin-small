@@ -3340,7 +3340,7 @@ fn deal_view(
         view.report_hint = "Both sides say they have sent their part. There is no hurry to report: \
              wait until you have really checked that you got what you were owed. If the payment \
              can be reversed (cards, PayPal, some bank transfers), consider waiting a day or two \
-             for a chargeback before you rate them, as a report is public. You can archive the \
+             for a reversal before you rate them, as a report is public. You can archive the \
              trade now and report from it later, and delete a report if you change your mind."
             .into();
     }

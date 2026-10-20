@@ -9,48 +9,33 @@ nav = "start"
 
 Download the latest version from the [releases page](https://github.com/andunieee/bitcoin-smol/releases/latest):
 
-- **Android**: the `.apk` file. Your phone will ask you to allow installing apps from your browser or file manager.
-- **Linux, macOS, Windows**: the file for your system. On macOS and Linux you may need to mark it as executable
-  before running it.
+- **Android**: the `.apk` file.
+- **Linux, macOS, Windows**: the file for your system. On macOS and Linux you may need to mark it as executable before running it.
 
-Or [use it in your browser](../app/), with nothing to install. Your key and your trades stay in that browser, so clearing
-its site data erases them. Back up your key first (see below).
+Or [use it in your browser](../app/), with nothing to install. Your key and your trades stay in that browser, so clearing its site data erases them.
 
 ## Your key is your identity
 
-On first launch the app creates a secret key and keeps it on your device. Its public half, your **npub**, is the
-only thing other people see. You will find both under **Settings → Your key**.
+On first launch the app creates a secret key and keeps it on your device. Its public half, your **npub**, is the only thing other people see. You will find both under **Settings → Your key**.
 
-Your reputation, the reports people write about you, is tied to that key. If you lose it, you start again from zero.
+Your reputation (the reports people write about you) is tied to that key. Your reputation is what gives people the trust to trade with you. If you lose it, your reputation starts again from zero.
 
-> Back it up: tap **Reveal nsec** in Settings and write it down somewhere safe. Anyone who has your nsec can act as
-> you, so never share it, and never paste it into a website or chat.
+So at the moment you start getting some reputation you should consider backing up your key.
 
-If you had a key before, paste its nsec under **Settings → Reset identity**. Other people will recognize you and see
-the reports written about you. Your trades, messages and the reports you wrote stay on the device they happened on,
-so on a new device the app doesn't yet know who you trust. Close your open offers and end your ongoing trades first.
+> Back it up: tap **Reveal nsec** in Settings and write it down somewhere safe. Anyone who has your nsec can act as you, so never share it, and never paste it into a website or chat.
 
 ## Relays
 
-Relays are the servers that carry offers, messages and reports. The app comes with a suggested list, which you can
-change in **Settings → Relays**. Anyone you want to trade with needs to see the same relays you post to, so stick to
-well-known ones.
+Relays are the servers that carry offers, messages and reports. The app uses slightly different relays for browsing new offers and then for messaging and publishing reports.
 
-Some relays are paid: they only accept posts from keys that paid them a fee. That makes a new identity cost
-something, which matters for trust. See [Trading safely](../safety/).
+The most important relays are those that display the offers in your home screen: we don't want an offer screen flooded with scammers, so by default bitcoin-smol relies solely on the https://nostr.wine relay, which charges a one-time fee for new accounts. This upfront cost makes it so it is not free for users to scam others out of some small amount, get bad ratings on their profile, then just throw away that identity and use a new one to scam again.
 
 ## Practice with XFK
 
-Until you have traded for real, the market opens on **XFK**, a pretend currency. Its traders are bots that run inside
-the app, on a relay that only exists on your device, so nothing you do there reaches anyone, and no money or bitcoin
-moves. A pretend seller and a pretend buyer always have an offer up, for 1 to 50 XFK, and a pretend taker takes any
-XFK offer you make. They go through every step of a trade with you, so you can see how one goes before it counts. An
-XFK is always worth 1,000 sats.
+The first time you open the bitcoin-smol app it loads the fake currency **XFK**. It comes with two bot traders that run inside the app. These exist so you can go through the process of taking an offer, specifying your parameters to the other side and finally concluding the offer and publishing a report.
 
-Trade reports about the bots stay in the practice market too, and never count towards who you trust. Pick another
-currency in the market or in the new offer form whenever you are ready.
+It also works on the other side: if you open an offer on **XFK** you will get a buyer or seller that is just a bot trying to transact with you.
 
 ## Next
 
-Read [Trading safely](../safety/) before your first trade. Then [take an offer](../taking-offers/) or
-[make your own](../making-offers/).
+Read [Trading safely](../safety/) before your first trade. Then [take an offer](../taking-offers/) or [make your own](../making-offers/).

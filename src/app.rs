@@ -3497,19 +3497,10 @@ fn mostly_failed(answers: &[Delivery]) -> bool {
     !answers.is_empty() && failed * 2 >= answers.len()
 }
 
-/// "2/3 relays" under one of our messages, or "sending…" until the first one answers
-fn delivery_summary(answers: &[Delivery]) -> Option<String> {
-    if answers.is_empty() {
-        return None;
-    }
-    if answers.iter().all(|(_, a)| a.is_none()) {
-        return Some("sending…".into());
-    }
-    Some(format!(
-        "{}/{} relays",
-        accepted(answers).len(),
-        answers.len()
-    ))
+/// "sending…" under one of our messages until the first relay answers. the answers themselves
+/// are in the relay popup, opened by clicking the message's time
+fn delivery_summary(answers: &[Delivery]) -> Option<&'static str> {
+    (!answers.is_empty() && answers.iter().all(|(_, a)| a.is_none())).then_some("sending…")
 }
 
 /// json indented for reading, or as it is if it doesn't parse

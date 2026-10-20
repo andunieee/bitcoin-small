@@ -23,6 +23,7 @@ export component TradePage inherits VerticalLayout {
     callback open-profile(string);
     callback archive-trade();
     callback conclude-trade(bool, string);
+    callback conclude-now();
     callback send-message(string);
     callback trade-pick-amount(string);
     callback trade-quote-price(string);
@@ -84,9 +85,17 @@ export component TradePage inherits VerticalLayout {
                         root.trade-concluding = true;
                     }
                 }
+                if root.trade.pending && !root.trade-concluding: Button {
+                    text: "Archive";
+                    small: true;
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        root.archive-trade();
+                    }
+                }
                 if root.trade.ongoing && !root.trade-concluding: TradeActions {
                     conclude => {
-                        root.trade-concluding = true;
+                        root.conclude-now();
                     }
                     archive => {
                         root.archive-trade();
@@ -198,8 +207,13 @@ export component TradePage inherits VerticalLayout {
                 mark-sent => {
                     root.trade-mark-sent();
                 }
+                ongoing: root.trade.ongoing;
                 conclude => {
-                    root.trade-concluding = true;
+                    if root.trade.ongoing {
+                        root.conclude-now();
+                    } else {
+                        root.trade-concluding = true;
+                    }
                 }
             }
         }
@@ -373,8 +387,13 @@ export component TradePage inherits VerticalLayout {
                     mark-sent => {
                         root.trade-mark-sent();
                     }
+                    ongoing: root.trade.ongoing;
                     conclude => {
-                        root.trade-concluding = true;
+                        if root.trade.ongoing {
+                            root.conclude-now();
+                        } else {
+                            root.trade-concluding = true;
+                        }
                     }
                 }
             }

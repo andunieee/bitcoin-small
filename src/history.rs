@@ -1,4 +1,4 @@
-//! trades that are over: concluded with a report, or just archived. they live in a redb database,
+//! trades that are over: concluded and waiting for a report, reported, or just archived. they live in a redb database,
 //! while the ongoing ones live in the json state.
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
@@ -14,6 +14,8 @@ const BY_END: TableDefinition<(u32, u64), ()> = TableDefinition::new("trades_by_
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
+    /// concluded, and waiting for the user to report it or archive it
+    Concluded,
     Success,
     Failure,
     /// put away without a report
@@ -23,6 +25,7 @@ pub enum Outcome {
 impl Outcome {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Outcome::Concluded => "concluded",
             Outcome::Success => "success",
             Outcome::Failure => "failure",
             Outcome::Archived => "archived",
@@ -160,6 +163,11 @@ impl History {
             }
         });
         removed
+    }
+
+    /// put a trade away without a report
+    pub fn archive(&self, id: i64) {
+        self.update(id, |t| t.outcome = Outcome::Archived);
     }
 
     fn update(&self, id: i64, f: impl FnOnce(&mut PastTrade)) {

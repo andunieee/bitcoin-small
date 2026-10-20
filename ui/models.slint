@@ -54,6 +54,8 @@ export struct PastReportItem {
 
 export struct TradeView {
     ongoing: bool,
+    // over and concluded, waiting for a report or to be archived
+    pending: bool,
     peer: string,
     peer-name: string,
     peer-color: color,

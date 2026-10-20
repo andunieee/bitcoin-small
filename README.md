@@ -24,7 +24,7 @@ There is **no escrow, no arbiter, no usernames and no server**. Every trade is b
 
 1. **Get the app:** download the desktop or Android app from the [releases page](https://github.com/andunieee/bitcoin-smol/releases/latest), or open the [web version](https://andunieee.github.io/bitcoin-smol/app/) in your browser.
 3. Filter by your desired currency and **take an offer** from the orderbook, or **make your own**. The chat page should guide you through what should happen in each step.
-4. **Conclude the trade** when it is done to publish a report about the other person.
+4. **Conclude the trade** when it is done, then report it to publish a report about the other person.
 
 Starting with someone you don't trust? Keep the amount to something small you're comfortable to lose, like $2.
 See [Trading safely](https://andunieee.github.io/bitcoin-smol/safety/).

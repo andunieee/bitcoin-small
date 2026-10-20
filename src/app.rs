@@ -395,7 +395,10 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     ui.on_delete_report(move |id| a.delete_report(&id));
 
     let a = app.clone();
-    ui.on_archive_trade(move || a.end_trade(Outcome::Archived, ""));
+    ui.on_archive_trade(move || a.archive_trade());
+
+    let a = app.clone();
+    ui.on_conclude_now(move || a.end_trade(Outcome::Concluded, ""));
 
     let a = app.clone();
     ui.on_delete_trade(move || a.delete_trade());
@@ -2269,6 +2272,7 @@ impl App {
                     .collect();
                 let view = TradeView {
                     ongoing: false,
+                    pending: t.outcome == Outcome::Concluded,
                     summary: t.offer_summary.trim_start_matches("maker ").into(),
                     ..Default::default()
                 };
@@ -2630,8 +2634,23 @@ impl App {
         });
     }
 
-    /// end the ongoing trade: with a public report (success or failure), or just archived.
-    /// either way it moves from the json state to the history database and we stop listening.
+    /// put away the trade being looked at without a report: an ongoing one ends, and a concluded
+    /// one that was waiting for its report stops waiting
+    fn archive_trade(self: &Arc<Self>) {
+        let current = *self.current_trade.lock().unwrap();
+        match current {
+            Some(TradeRef::Ongoing(_)) => self.end_trade(Outcome::Archived, ""),
+            Some(TradeRef::Past(id)) => {
+                self.store.lock().unwrap().history.archive(id);
+                self.leave_trade();
+            }
+            None => {}
+        }
+    }
+
+    /// end the ongoing trade: concluded to be reported later, with a public report (success or
+    /// failure), or just archived. it moves from the json state to the history database and we
+    /// stop listening.
     fn end_trade(self: &Arc<Self>, outcome: Outcome, comment: &str) {
         let Some(TradeRef::Ongoing(key)) = *self.current_trade.lock().unwrap() else {
             return;
@@ -2661,7 +2680,7 @@ impl App {
             (trade.peer, past_id)
         };
         self.dm_subs.lock().unwrap().remove(&key.to_hex());
-        if outcome != Outcome::Archived
+        if matches!(outcome, Outcome::Success | Outcome::Failure)
             && let Ok(peer) = trade_peer.parse()
         {
             self.publish_report(peer, outcome == Outcome::Success, comment, Some(past_id));
@@ -2713,7 +2732,7 @@ impl App {
             .iter()
             .map(|o| self.offer_item(o))
             .collect();
-        let (ongoing, past, concluded) = {
+        let (ongoing, pending, past, concluded) = {
             let store = self.store.lock().unwrap();
             let s = &store.state;
             let mut trades: Vec<_> = s.trades.iter().collect();
@@ -2750,28 +2769,35 @@ impl App {
                 })
                 .collect();
             let labels = s.labels.clone();
-            let past: Vec<TradeItem> = store
-                .history
-                .list(PAST_TRADES_SHOWN)
-                .iter()
-                .filter_map(|t| {
-                    let pk: PubKey = t.peer.parse().ok()?;
-                    Some(TradeItem {
-                        key: t.id.to_string().into(),
-                        peer_name: display_name(&labels, &pk).into(),
-                        peer_color: key_color(&pk),
-                        summary: t.offer_summary.trim_start_matches("maker ").into(),
-                        status: past_status(t).into(),
-                        last: ago(Timestamp(t.ended_at)).into(),
-                        blocked: false,
-                    })
+            let past_item = |t: &PastTrade| {
+                let pk: PubKey = t.peer.parse().ok()?;
+                Some(TradeItem {
+                    key: t.id.to_string().into(),
+                    peer_name: display_name(&labels, &pk).into(),
+                    peer_color: key_color(&pk),
+                    summary: t.offer_summary.trim_start_matches("maker ").into(),
+                    status: past_status(t).into(),
+                    last: ago(Timestamp(t.ended_at)).into(),
+                    blocked: false,
                 })
+            };
+            // concluded ones stay here until reported or archived, however many they are
+            let (waiting, rest): (Vec<_>, Vec<_>) = store
+                .history
+                .list(usize::MAX)
+                .into_iter()
+                .partition(|t| t.outcome == Outcome::Concluded);
+            let pending: Vec<TradeItem> = waiting.iter().filter_map(past_item).collect();
+            let past: Vec<TradeItem> = rest
+                .iter()
+                .take(PAST_TRADES_SHOWN)
+                .filter_map(past_item)
                 .collect();
             // archived ones weren't concluded
             let concluded = store
                 .history
                 .any(|t| t.outcome != Outcome::Archived && real_trade(t.offer.as_ref()));
-            (ongoing, past, concluded)
+            (ongoing, pending, past, concluded)
         };
         // the tip stays until a real trade went all the way, practice doesn't count
         let newcomer = !concluded;
@@ -2779,6 +2805,7 @@ impl App {
             ui.set_newcomer(newcomer);
             ui.set_my_offers(ModelRc::new(VecModel::from(open)));
             ui.set_ongoing_trades(ModelRc::new(VecModel::from(ongoing)));
+            ui.set_pending_trades(ModelRc::new(VecModel::from(pending)));
             ui.set_past_trades(ModelRc::new(VecModel::from(past)));
         });
         self.sync_background();
@@ -3372,8 +3399,9 @@ fn deal_view(
         view.report_hint = "Both sides say they have sent their part. There is no hurry to report: \
              wait until you have really checked that you got what you were owed. If the payment \
              can be reversed (cards, PayPal, some bank transfers), consider waiting a day or two \
-             for a reversal before you rate them, as a report is public. You can archive the \
-             trade now and report from it later, and delete a report if you change your mind."
+             for a reversal before you rate them, as a report is public. You can conclude the \
+             trade now and report from it later, or archive it if you never will, and delete a \
+             report if you change your mind."
             .into();
     }
     for step in deal.available(terms, me) {
@@ -3442,6 +3470,7 @@ fn deal_view(
 
 fn past_status(t: &PastTrade) -> String {
     let outcome = match t.outcome {
+        Outcome::Concluded => "concluded, report pending",
         Outcome::Success => "✓ concluded: success",
         Outcome::Failure => "✗ concluded: failure",
         Outcome::Archived => "archived",

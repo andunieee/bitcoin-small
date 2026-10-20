@@ -76,6 +76,7 @@ export component AppWindow inherits Window {
     // trades
     in property <[OfferItem]> my-offers;
     in property <[TradeItem]> ongoing-trades;
+    in property <[TradeItem]> pending-trades;
     in property <[TradeItem]> past-trades;
     in property <TradeView> trade;
     in property <[MsgItem]> messages;
@@ -98,6 +99,7 @@ export component AppWindow inherits Window {
     pure callback trade-check-details(string) -> string;
     callback trade-mark-sent();
     callback conclude-trade(bool, string);
+    callback conclude-now();
     callback archive-trade();
     callback delete-trade();
     callback delete-report(string);
@@ -331,6 +333,7 @@ export component AppWindow inherits Window {
                     if root.page == 3: TradesPage {
                         my-offers: root.my-offers;
                         ongoing-trades: root.ongoing-trades;
+                        pending-trades: root.pending-trades;
                         past-trades: root.past-trades;
                         close-offer(id) => {
                             root.close-offer(id);
@@ -359,6 +362,9 @@ export component AppWindow inherits Window {
                         }
                         archive-trade => {
                             root.archive-trade();
+                        }
+                        conclude-now => {
+                            root.conclude-now();
                         }
                         conclude-trade(success, comment) => {
                             root.conclude-trade(success, comment);

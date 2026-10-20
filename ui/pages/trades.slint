@@ -6,6 +6,7 @@ import { TradeCard } from "../trade_widgets.slint";
 export component TradesPage inherits ScrollView {
     in property <[OfferItem]> my-offers;
     in property <[TradeItem]> ongoing-trades;
+    in property <[TradeItem]> pending-trades;
     in property <[TradeItem]> past-trades;
     callback close-offer(string);
     callback open-trade(string);
@@ -68,6 +69,19 @@ export component TradesPage inherits ScrollView {
             item: t;
             clicked => {
                 root.open-trade(t.key);
+            }
+        }
+
+        if root.pending-trades.length > 0: Title {
+            text: "Pending reports";
+        }
+        if root.pending-trades.length > 0: Muted {
+            text: "concluded, and kept here until you report them or archive them.";
+        }
+        for t in root.pending-trades: TradeCard {
+            item: t;
+            clicked => {
+                root.open-past-trade(t.key);
             }
         }
 

@@ -14,6 +14,7 @@ export component DealPanel inherits VerticalLayout {
     callback pick-payment(string);
     callback give-details(string);
     callback mark-sent();
+    in property <bool> ongoing;
     callback conclude();
     // why the details can't be sent, empty when they can
     pure callback check-details(string) -> string;
@@ -258,7 +259,7 @@ export component DealPanel inherits VerticalLayout {
             padding-right: 14px;
             spacing: 4px;
             Text {
-                text: "next step: report, when you are sure";
+                text: root.ongoing ? "next step: conclude, when you are sure" : "next step: report, when you are sure";
                 font-weight: 700;
             }
 
@@ -268,7 +269,7 @@ export component DealPanel inherits VerticalLayout {
             }
 
             Button {
-                text: "Report the trade…";
+                text: root.ongoing ? "Conclude the trade" : "Report the trade…";
                 clicked => {
                     root.conclude();
                 }

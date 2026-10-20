@@ -1,4 +1,4 @@
-import { Palette } from "std-widgets.slint";
+import { Palette, LineEdit } from "std-widgets.slint";
 
 export component Card inherits Rectangle {
     background: Palette.alternate-background;
@@ -153,6 +153,60 @@ export component Choices inherits Card {
             clicked => {
                 root.picked(option);
             }
+        }
+    }
+}
+
+// a text field for a signed number with up and down buttons, like a browser's number input.
+// it stays text so that a minus sign can be typed on every keyboard.
+export component NumberEdit inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder-text;
+    in property <float> step: 1;
+    callback edited();
+    min-height: 32px;
+    preferred-height: 32px;
+
+    function nudge(direction: float) {
+        // rounded so that 0.1 steps don't leave float noise behind
+        root.text = "" + Math.round((root.text.to-float() + direction * root.step) * 1000) / 1000;
+        root.edited();
+    }
+
+    LineEdit {
+        x: 0;
+        width: parent.width - 22px;
+        height: parent.height;
+        text <=> root.text;
+        placeholder-text: root.placeholder-text;
+        input-type: InputType.text;
+        edited => {
+            root.edited();
+        }
+    }
+
+    for direction[i] in [1, -1]: Rectangle {
+        x: parent.width - 20px;
+        y: i == 0 ? 0px : parent.height / 2 + 1px;
+        width: 20px;
+        height: parent.height / 2 - 1px;
+        border-radius: 3px;
+        border-width: 1px;
+        border-color: Palette.border.transparentize(40%);
+        background: Palette.control-background.darker(arrow.pressed ? 0.15 : arrow.has-hover ? 0.07 : 0);
+        arrow := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.nudge(direction);
+            }
+        }
+
+        Text {
+            text: i == 0 ? "▲" : "▼";
+            font-size: 8px;
+            color: Palette.control-foreground;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 }

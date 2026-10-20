@@ -1,6 +1,6 @@
 import { LineEdit, TextEdit, ComboBox, CheckBox, ScrollView, Switch } from "std-widgets.slint";
 import { PayItem } from "../models.slint";
-import { Muted, Title, Button } from "../widgets.slint";
+import { Muted, Title, Button, NumberEdit } from "../widgets.slint";
 
 export component CreatePage inherits ScrollView {
     in property <[string]> create-currencies;
@@ -85,11 +85,11 @@ export component CreatePage inherits ScrollView {
                 vertical-alignment: center;
             }
 
-            LineEdit {
-                width: 80px;
+            NumberEdit {
+                width: 100px;
                 text <=> root.create-premium;
                 placeholder-text: "+1";
-                input-type: InputType.text;
+                step: 0.1;
                 edited => {
                     root.create-premium-changed();
                 }

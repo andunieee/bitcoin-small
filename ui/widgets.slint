@@ -97,8 +97,8 @@ export component Button inherits Rectangle {
     in property <bool> enabled: true;
     in property <bool> small;
     callback clicked;
-    min-height: root.small ? 26px : 32px;
-    max-height: root.small ? 26px : 32px;
+    // grows taller when a long label has to wrap
+    min-height: max(root.small ? 26px : 32px, t.preferred-height + (root.small ? 8px : 12px));
     min-width: 32px;
     preferred-width: t.preferred-width + (root.small ? 16px : 24px);
     horizontal-stretch: 0;
@@ -117,7 +117,10 @@ export component Button inherits Rectangle {
     }
 
     t := Text {
+        x: 6px;
+        width: parent.width - 12px;
         text: root.text;
+        wrap: word-wrap;
         color: root.primary ? Palette.accent-foreground : Palette.control-foreground;
         horizontal-alignment: center;
         vertical-alignment: center;

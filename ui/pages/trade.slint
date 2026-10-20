@@ -35,6 +35,9 @@ export component TradePage inherits VerticalLayout {
     callback delete-report(string);
     callback open-message-report(string);
 
+    // whether the chat is scrolled to (near) the end, so new messages should keep it there
+    property <bool> chat-follow: true;
+
     padding: 16px;
     spacing: 8px;
 
@@ -207,8 +210,16 @@ export component TradePage inherits VerticalLayout {
         VerticalLayout {
             horizontal-stretch: 1;
             spacing: 8px;
-            ListView {
+            chat := ListView {
                 vertical-stretch: 1;
+                changed content-y => {
+                    root.chat-follow = self.content-y <= self.height - self.content-height + 40px;
+                }
+                changed content-height => {
+                    if root.chat-follow {
+                        self.content-y = min(0px, self.height - self.content-height);
+                    }
+                }
                 for msg in root.messages: HorizontalLayout {
                     padding-bottom: 6px;
                     padding-right: 6px;

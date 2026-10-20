@@ -380,6 +380,10 @@ impl Deal {
                     ));
                 }
             }
+            // a price that no amount could be converted with is not a price
+            Action::Price(p) if !(p.is_finite() && *p > 0.0 && p.recip().is_finite()) => {
+                return Err("the price must be more than zero".into());
+            }
             Action::BitcoinMethod(m) if !terms.bitcoin_methods.contains(m) => {
                 return Err(format!("{m} is not one of the offer's bitcoin methods"));
             }

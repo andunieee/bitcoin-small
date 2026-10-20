@@ -89,10 +89,15 @@ impl Files for LocalStorage {
 
 /// our key is in "key". the bots of the practice market (see `xfk.rs`) keep theirs next to it.
 pub fn load_or_create_key(files: &dyn Files, name: &str) -> SecretKey {
-    if let Some(hex) = files.read(name)
-        && let Ok(sk) = hex.trim().parse::<SecretKey>()
-    {
-        return sk;
+    if let Some(hex) = files.read(name) {
+        if let Ok(sk) = hex.trim().parse::<SecretKey>() {
+            return sk;
+        }
+        // never replace what we can't read without keeping it
+        log::error!("the key {name} is unreadable, kept as {name}.bad");
+        if let Err(err) = files.write(&format!("{name}.bad"), &hex) {
+            log::error!("failed to keep the key {name}: {err}");
+        }
     }
     let sk = SecretKey::generate();
     if let Err(err) = files.write(name, &sk.to_hex()) {
@@ -226,7 +231,18 @@ impl Store {
     fn new(files: Arc<dyn Files>, db: RedbEventDatabase, history: History) -> Self {
         let state = files
             .read("state.json")
-            .and_then(|s| serde_json::from_str::<State>(&s).ok())
+            .and_then(|s| match serde_json::from_str::<State>(&s) {
+                Ok(state) => Some(state),
+                Err(err) => {
+                    // starting empty would overwrite it on the next save, taking the trades and
+                    // the block list with it, so keep what is there
+                    log::error!("unreadable state.json, kept as state.json.bad: {err}");
+                    if let Err(err) = files.write("state.json.bad", &s) {
+                        log::error!("failed to keep state.json: {err}");
+                    }
+                    None
+                }
+            })
             .unwrap_or_else(|| State {
                 app_relays: DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect(),
                 known_relays: DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect(),

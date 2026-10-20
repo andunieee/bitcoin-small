@@ -1,6 +1,7 @@
 //! glue between the ui, the relays and the local store
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -127,6 +128,8 @@ struct App {
     current_profile: Mutex<Option<PubKey>>,
     /// held while quoting prices, so a quote isn't sent twice
     quoting: Mutex<()>,
+    /// the number of the last offers refresh, so a slow older one doesn't replace a newer one
+    refresh_gen: AtomicU64,
     /// what we published this session, and the id for the next one
     sent: Mutex<(Vec<Sent>, u64)>,
     /// what the relay report popup shows, empty while it is closed
@@ -243,6 +246,7 @@ fn build(store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint::Pl
         current_trade: Mutex::new(None),
         current_profile: Mutex::new(None),
         quoting: Mutex::new(()),
+        refresh_gen: AtomicU64::new(0),
         sent: Mutex::new((vec![], 0)),
         popup: Mutex::new(vec![]),
         finding_write_relays: tokio::sync::Mutex::new(()),
@@ -561,6 +565,18 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
             }
         }
     });
+}
+
+/// how many event ids a subscription remembers
+const SEEN_KEPT: usize = 10_000;
+
+/// whether `id` is new. past a limit the memory starts over: what comes again is dropped by the
+/// handlers that matter, and a subscription that lives for days shouldn't grow for ever.
+fn mark_seen(seen: &mut HashSet<ID>, id: ID) -> bool {
+    if seen.len() >= SEEN_KEPT {
+        seen.clear();
+    }
+    seen.insert(id)
 }
 
 fn checklist(names: &[&str], checked: &[String]) -> ModelRc<PayItem> {
@@ -1021,7 +1037,7 @@ impl App {
                             .subscribe(std::slice::from_ref(&url), filter.clone());
                         while let Some(occ) = sub.recv().await {
                             if let Occurrence::Event(evt) = occ
-                                && seen.lock().unwrap().insert(evt.id)
+                                && mark_seen(&mut seen.lock().unwrap(), evt.id)
                             {
                                 on_event(&app, evt, &url);
                             }
@@ -1082,6 +1098,7 @@ impl App {
             previous.abort();
         }
 
+        let generation = self.refresh_gen.fetch_add(1, Ordering::SeqCst) + 1;
         let app = self.clone();
         tokio::spawn(async move {
             let _ = app.ui.upgrade_in_event_loop(|ui| ui.set_loading(true));
@@ -1098,6 +1115,10 @@ impl App {
                     },
                 )
                 .await;
+            if app.refresh_gen.load(Ordering::SeqCst) != generation {
+                // a newer refresh is on its way and will say it
+                return;
+            }
 
             let mut offers = app.offers_from(&events, since, false);
             // the practice market's are kept up to date as they come, see watch_practice_market
@@ -2623,6 +2644,10 @@ impl App {
                 }
             };
             store.state.trades.remove(&key.to_hex());
+            // nobody listens to this conversation any more, so its rumors need no memory
+            for m in trade.messages.iter().filter(|m| m.mine) {
+                store.state.my_rumors.remove(&m.id);
+            }
             store.persist();
             (trade.peer, past_id)
         };

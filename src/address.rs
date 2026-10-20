@@ -75,7 +75,7 @@ fn lightning(s: &str, sats: Option<u64>) -> Result<String, String> {
     }
     let msat = invoice_msat(amount).ok_or_else(invalid)?;
     if let (Some(msat), Some(sats)) = (msat, sats) {
-        if msat != sats * 1000 {
+        if sats.checked_mul(1000) != Some(msat) {
             return Err(format!(
                 "the invoice is for {} sats, the trade is for {} sats",
                 crate::prices::thousands(msat as f64 / 1000.0),

@@ -84,6 +84,8 @@ jobs:
         run: |
           export ANDROID_NDK_ROOT="$ANDROID_NDK_LATEST_HOME"
           cargo apk build --lib --release
+          android/package.sh target/release/apk/bitcoin-smol.apk \
+            "$CARGO_APK_RELEASE_KEYSTORE" "$CARGO_APK_RELEASE_KEYSTORE_PASSWORD"
           mkdir dist
           cp target/release/apk/bitcoin-smol.apk "dist/bitcoin-smol-${GITHUB_REF_NAME}.apk"
       - uses: actions/upload-artifact@v4

@@ -33,5 +33,9 @@ fn android_main(android_app: slint::android::AndroidApp) {
         .internal_data_path()
         .expect("android gives every app an internal data dir");
     slint::android::init(android_app).expect("failed to init slint on android");
-    run(data_dir).expect("app crashed");
+    let res = run(data_dir);
+    // the window is gone (swiped away from the recents) and the app with it, so there is nothing
+    // left for the service to keep alive
+    notify::set_background(false);
+    res.expect("app crashed");
 }

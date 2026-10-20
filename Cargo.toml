@@ -87,5 +87,12 @@ name = "android.permission.INTERNET"
 [[package.metadata.android.uses_permission]]
 name = "android.permission.POST_NOTIFICATIONS"
 
+# for the service that keeps the app alive in the background, see android/package.sh
+[[package.metadata.android.uses_permission]]
+name = "android.permission.FOREGROUND_SERVICE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+
 [package.metadata.android.application]
 label = "bitcoin smol"

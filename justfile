@@ -16,6 +16,7 @@ android-install:
     export CARGO_APK_DEV_KEYSTORE="$PWD/release.jks"
     export CARGO_APK_DEV_KEYSTORE_PASSWORD="$(cat release.jks.password)"
     cargo apk build --lib --target aarch64-linux-android
+    android/package.sh ~/.cache/cargo-target/debug/apk/bitcoin-smol.apk "$CARGO_APK_DEV_KEYSTORE" "$CARGO_APK_DEV_KEYSTORE_PASSWORD"
     adb install -r ~/.cache/cargo-target/debug/apk/bitcoin-smol.apk
 
 # serve the web build on http://127.0.0.1:8080, rebuilding on changes

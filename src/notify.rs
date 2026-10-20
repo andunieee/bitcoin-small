@@ -1,6 +1,9 @@
 //! system notifications: the desktop's notification service, android's notification manager
 //! (through jni), or the browser's notifications. each one is best effort, a failure is only
 //! logged.
+//!
+//! on android there is also the foreground service that keeps the app running in the background,
+//! so the notifications keep coming.
 
 /// show a notification. a later one with the same `tag` replaces it, where the system allows.
 pub fn show(title: &str, body: &str, tag: &str) {
@@ -13,8 +16,16 @@ pub fn request_permission() {
     imp::request_permission();
 }
 
+/// keep the app running while it is in the background (`on`), or let go of that. only android
+/// freezes apps, so only there it does anything.
+pub fn set_background(on: bool) {
+    imp::set_background(on);
+}
+
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 mod imp {
+    pub fn set_background(_on: bool) {}
+
     pub fn show(title: String, body: String, _tag: String) {
         // it waits for the notification service, which is no reason to hold up the ui
         std::thread::spawn(move || {
@@ -35,6 +46,8 @@ mod imp {
 #[cfg(target_arch = "wasm32")]
 mod imp {
     use web_sys::{Notification, NotificationOptions, NotificationPermission};
+
+    pub fn set_background(_on: bool) {}
 
     /// browsers without notifications have no `Notification` at all, and touching it would throw
     fn supported() -> bool {
@@ -64,6 +77,12 @@ mod imp {
 mod imp {
     use jni::objects::{JObject, JValue};
     use jni::{JNIEnv, JavaVM};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// the service in android/src, which android/package.sh adds to the apk
+    const SERVICE: &str = "cash.small.bitcoin.ForegroundService";
+    /// whether the service is meant to be running
+    static BACKGROUND: AtomicBool = AtomicBool::new(false);
 
     const CHANNEL: &str = "trades";
     /// NotificationManager.IMPORTANCE_HIGH, so it pops up
@@ -75,7 +94,7 @@ mod imp {
     fn with_activity(
         what: &str,
         f: impl for<'a> FnOnce(&mut JNIEnv<'a>, &JObject<'a>) -> jni::errors::Result<()>,
-    ) {
+    ) -> bool {
         let ctx = ndk_context::android_context();
         // SAFETY: android-activity sets these up before android_main, and they live as long as
         // the process. the activity is a global reference, which dropping a JObject leaves alone.
@@ -87,11 +106,17 @@ mod imp {
         };
         let vm = match vm {
             Ok(vm) => vm,
-            Err(err) => return log::warn!("{what}: no java vm: {err}"),
+            Err(err) => {
+                log::warn!("{what}: no java vm: {err}");
+                return false;
+            }
         };
         let mut env = match vm.attach_current_thread() {
             Ok(env) => env,
-            Err(err) => return log::warn!("{what}: {err}"),
+            Err(err) => {
+                log::warn!("{what}: {err}");
+                return false;
+            }
         };
         // the local references made in there are freed at the end
         let res = env.with_local_frame(32, |env| f(env, &activity));
@@ -99,9 +124,50 @@ mod imp {
             let _ = env.exception_describe();
             let _ = env.exception_clear();
         }
-        if let Err(err) = res {
+        if let Err(err) = &res {
             log::warn!("{what}: {err}");
         }
+        res.is_ok()
+    }
+
+    /// start or stop the foreground service. starting it needs the app to be in the foreground,
+    /// which it is when an offer is made or a trade taken, and when it starts with one already.
+    pub fn set_background(on: bool) {
+        if BACKGROUND.swap(on, Ordering::SeqCst) == on {
+            return;
+        }
+        std::thread::spawn(move || {
+            let ok = with_activity("failed to change the foreground service", |env, activity| {
+                let intent = env.new_object("android/content/Intent", "()V", &[])?;
+                let class = env.new_string(SERVICE)?;
+                env.call_method(
+                    &intent,
+                    "setClassName",
+                    "(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;",
+                    &[activity.into(), (&class).into()],
+                )?;
+                if on {
+                    env.call_method(
+                        activity,
+                        "startForegroundService",
+                        "(Landroid/content/Intent;)Landroid/content/ComponentName;",
+                        &[(&intent).into()],
+                    )?;
+                } else {
+                    env.call_method(
+                        activity,
+                        "stopService",
+                        "(Landroid/content/Intent;)Z",
+                        &[(&intent).into()],
+                    )?;
+                }
+                Ok(())
+            });
+            if !ok {
+                // so the next check tries again
+                BACKGROUND.store(!on, Ordering::SeqCst);
+            }
+        });
     }
 
     pub fn show(title: String, body: String, tag: String) {

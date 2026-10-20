@@ -191,6 +191,15 @@ fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
     }
     app.refresh_offers();
 
+    // offers expire without anything happening, which is when the background service can go
+    let a = app.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            a.sync_background();
+        }
+    });
+
     let a = app.clone();
     tokio::spawn(async move {
         loop {
@@ -2675,6 +2684,28 @@ impl App {
         let _ = self.ui.upgrade_in_event_loop(|ui| ui.set_page(3));
     }
 
+    /// while we have a real offer open or a real trade going, the app is kept running in the
+    /// background so we hear about replies, and it is let go of when there are none
+    fn sync_background(&self) {
+        if self.offline {
+            return;
+        }
+        let offers = self
+            .open_offers()
+            .iter()
+            .any(|o| !xfk::is_xfk(&o.currency));
+        let wanted = offers
+            || self
+                .store
+                .lock()
+                .unwrap()
+                .state
+                .trades
+                .values()
+                .any(|t| t.offer.as_ref().is_none_or(|o| !xfk::is_xfk(&o.currency)));
+        crate::notify::set_background(wanted);
+    }
+
     /// the trades tab: our open offers, ongoing trades and the most recent past ones
     fn render_trades(&self) {
         let open: Vec<OfferItem> = self
@@ -2750,6 +2781,7 @@ impl App {
             ui.set_ongoing_trades(ModelRc::new(VecModel::from(ongoing)));
             ui.set_past_trades(ModelRc::new(VecModel::from(past)));
         });
+        self.sync_background();
     }
 
     fn set_blocked(self: &Arc<Self>, peer: PubKey, blocked: bool) {

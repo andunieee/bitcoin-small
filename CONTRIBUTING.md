@@ -44,6 +44,11 @@ cargo apk build --lib --release
 The APK settings (package name, SDK versions and the `INTERNET` permission) are under `[package.metadata.android]` in
 `Cargo.toml`.
 
+cargo-apk can't add Java code or a `<service>` to the manifest, so `android/package.sh` does it to the APK it built:
+it adds the foreground service in `android/src`, which keeps the app running in the background while there are open
+offers or ongoing trades. `just android-install` and the release workflow run it, and the APK from a bare
+`cargo apk build` lacks the service (the app works, but only notifies while it is open).
+
 For the web you need [trunk](https://trunkrs.dev):
 
 ```sh

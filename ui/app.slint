@@ -145,54 +145,319 @@ export component AppWindow inherits Window {
     // room for the deal panel next to the chat
     property <bool> trade-wide: root.width >= 760px;
 
-    VerticalLayout {
-        // header, extended under the status bar on phones that draw behind it
-        Rectangle {
-            height: 52px + root.safe-area-insets.top;
-            background: #f7931a;
+    // false when there is nowhere to go back to, which is when the android back button leaves the app
+    function go-back() -> bool {
+        if root.sent-open {
+            root.close-sent();
+        } else if root.page == 1 || root.page == 5 {
+            // the offer is reached from the market, the profile from wherever it was opened
+            root.page = root.page == 1 ? 0 : root.back-page;
+        } else if root.page == 4 {
+            // the trade view is reached from the trades tab, or from a profile opened from it
+            root.page = 3;
+        } else if root.page != 0 {
+            root.page = 0;
+        } else {
+            return false;
+        }
+        return true;
+    }
+
+    init => {
+        keys.focus();
+    }
+
+    keys := FocusScope {
+        capture-key-pressed(event) => {
+            if event.text == Key.Back && root.go-back() {
+                return accept;
+            }
+            return reject;
+        }
+
+            VerticalLayout {
+            // header, extended under the status bar on phones that draw behind it
+            Rectangle {
+                height: 52px + root.safe-area-insets.top;
+                background: #f7931a;
+                HorizontalLayout {
+                    padding-top: root.safe-area-insets.top + 8px;
+                    padding-bottom: 8px;
+                    padding-left: root.safe-area-insets.left;
+                    padding-right: root.safe-area-insets.right;
+                    Rectangle {
+                        horizontal-stretch: 0;
+                    }
+
+                    HorizontalLayout {
+                        max-width: root.max-content-width;
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 8px;
+                        if root.page == 1 || root.page == 4 || root.page == 5: Button {
+                            text: "‹";
+                            clicked => {
+                                root.go-back();
+                            }
+                        }
+                        Text {
+                            text: "bitcoin smol";
+                            color: white;
+                            font-size: 18px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.status;
+                            color: white;
+                            font-size: 11px;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                            // what it says is mostly about relays, which are set up there
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.page = 6;
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 0;
+                    }
+                }
+            }
+
+            // pages
             HorizontalLayout {
-                padding-top: root.safe-area-insets.top + 8px;
-                padding-bottom: 8px;
+                vertical-stretch: 1;
                 padding-left: root.safe-area-insets.left;
                 padding-right: root.safe-area-insets.right;
                 Rectangle {
                     horizontal-stretch: 0;
                 }
 
-                HorizontalLayout {
+                Rectangle {
                     max-width: root.max-content-width;
-                    padding-left: 16px;
-                    padding-right: 16px;
-                    spacing: 8px;
-                    if root.page == 1 || root.page == 4 || root.page == 5: Button {
-                        text: "‹";
-                        clicked => {
-                            // the trade view is reached from the trades tab, or from a profile opened from it
-                            root.page = root.page == 4 ? 3 : root.back-page;
+                    // ---------------------------------------------------------------- market
+                    if root.page == 0: MarketPage {
+                        offers: root.offers;
+                        currencies: root.currencies;
+                        filter-side <=> root.filter-side;
+                        filter-currency <=> root.filter-currency;
+                        loading: root.loading;
+                        newcomer: root.newcomer;
+                        refresh-offers => {
+                            root.refresh-offers();
+                        }
+                        filters-changed => {
+                            root.filters-changed();
+                        }
+                        open-offer(id) => {
+                            root.open-offer(id);
+                        }
+                        open-docs => {
+                            root.open-docs();
                         }
                     }
-                    Text {
-                        text: "bitcoin smol";
-                        color: white;
-                        font-size: 18px;
-                        font-weight: 700;
-                        vertical-alignment: center;
+
+                    // ---------------------------------------------------------------- offer detail
+                    if root.page == 1: OfferPage {
+                        current-offer: root.current-offer;
+                        history: root.offer-history;
+                        open-profile(who) => {
+                            root.open-profile(who);
+                        }
+                        contact-maker(id) => {
+                            root.contact-maker(id);
+                        }
+                        close-offer(id) => {
+                            root.close-offer(id);
+                        }
+                        open-history(id) => {
+                            root.open-past-trade(id);
+                        }
+                        back => {
+                            root.page = 0;
+                        }
                     }
 
-                    Text {
-                        text: root.status;
-                        color: white;
-                        font-size: 11px;
-                        horizontal-alignment: right;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                        // what it says is mostly about relays, which are set up there
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.page = 6;
-                            }
+                    // ---------------------------------------------------------------- create
+                    if root.page == 2: CreatePage {
+                        create-currencies: root.create-currencies;
+                        create-apis: root.create-apis;
+                        payment-options <=> root.payment-options;
+                        payment-more <=> root.payment-more;
+                        bitcoin-options <=> root.bitcoin-options;
+                        create-side <=> root.create-side;
+                        create-currency <=> root.create-currency;
+                        create-api <=> root.create-api;
+                        create-premium <=> root.create-premium;
+                        create-amount-min <=> root.create-amount-min;
+                        create-amount-max <=> root.create-amount-max;
+                        create-amount-linked <=> root.create-amount-linked;
+                        create-other-payments <=> root.create-other-payments;
+                        create-relays <=> root.create-relays;
+                        create-publish-relays <=> root.create-publish-relays;
+                        create-description <=> root.create-description;
+                        create-preview: root.create-preview;
+                        create-custom <=> root.create-custom;
+                        create-more-payments <=> root.create-more-payments;
+                        create-currency-changed(c) => {
+                            root.create-currency-changed(c);
+                        }
+                        create-api-changed(a) => {
+                            root.create-api-changed(a);
+                        }
+                        create-premium-changed => {
+                            root.create-premium-changed();
+                        }
+                        toggle-payment(name, checked) => {
+                            root.toggle-payment(name, checked);
+                        }
+                        toggle-bitcoin(name, checked) => {
+                            root.toggle-bitcoin(name, checked);
+                        }
+                        publish-offer => {
+                            root.publish-offer();
+                        }
+                    }
+
+                    // ---------------------------------------------------------------- trades
+                    if root.page == 3: TradesPage {
+                        my-offers: root.my-offers;
+                        ongoing-trades: root.ongoing-trades;
+                        past-trades: root.past-trades;
+                        close-offer(id) => {
+                            root.close-offer(id);
+                        }
+                        open-trade(key) => {
+                            root.open-trade(key);
+                        }
+                        open-past-trade(key) => {
+                            root.open-past-trade(key);
+                        }
+                    }
+
+                    // ---------------------------------------------------------------- trade
+                    if root.page == 4: TradePage {
+                        trade: root.trade;
+                        messages: root.messages;
+                        reports: root.trade-reports;
+                        deal: root.deal;
+                        trade-confirming <=> root.trade-confirming;
+                        trade-details-draft <=> root.trade-details-draft;
+                        trade-concluding <=> root.trade-concluding;
+                        trade-confirm-delete <=> root.trade-confirm-delete;
+                        trade-wide: root.trade-wide;
+                        open-profile(who) => {
+                            root.open-profile(who);
+                        }
+                        archive-trade => {
+                            root.archive-trade();
+                        }
+                        conclude-trade(success, comment) => {
+                            root.conclude-trade(success, comment);
+                        }
+                        send-message(text) => {
+                            root.send-message(text);
+                        }
+                        trade-pick-amount(text) => {
+                            root.trade-pick-amount(text);
+                        }
+                        trade-quote-price(text) => {
+                            root.trade-quote-price(text);
+                        }
+                        trade-pick-bitcoin(m) => {
+                            root.trade-pick-bitcoin(m);
+                        }
+                        trade-pick-payment(m) => {
+                            root.trade-pick-payment(m);
+                        }
+                        trade-give-details(d) => {
+                            root.trade-give-details(d);
+                        }
+                        trade-check-details(d) => {
+                            return root.trade-check-details(d);
+                        }
+                        trade-mark-sent => {
+                            root.trade-mark-sent();
+                        }
+                        delete-report(id) => {
+                            root.delete-report(id);
+                        }
+                        delete-trade => {
+                            root.delete-trade();
+                        }
+                        open-message-report(id) => {
+                            root.open-message-report(id);
+                        }
+                    }
+
+                    // ---------------------------------------------------------------- profile
+                    if root.page == 5: ProfilePage {
+                        profile-npub: root.profile-npub;
+                        profile-name: root.profile-name;
+                        profile-color: root.profile-color;
+                        profile-label: root.profile-label;
+                        profile-blocked: root.profile-blocked;
+                        profile-is-me: root.profile-is-me;
+                        own-reports: root.own-reports;
+                        others-reports: root.others-reports;
+                        others-note: root.others-note;
+                        open-trade(peer) => {
+                            root.open-trade(peer);
+                        }
+                        report-trade(success, comment) => {
+                            root.report-trade(success, comment);
+                        }
+                        set-blocked(blocked) => {
+                            root.set-blocked(blocked);
+                        }
+                        set-label(label) => {
+                            root.set-label(label);
+                        }
+                    }
+
+                    // ---------------------------------------------------------------- people
+                    if root.page == 7: PeoplePage {
+                        people: root.people;
+                        people-filter <=> root.people-filter;
+                        people-filter-changed(t) => {
+                            root.people-filter-changed(t);
+                        }
+                        open-profile(npub) => {
+                            root.open-profile(npub);
+                        }
+                    }
+
+                    // ---------------------------------------------------------------- settings
+                    if root.page == 6: SettingsPage {
+                        npub: root.npub;
+                        nsec: root.nsec;
+                        relays: root.relays;
+                        show-reset-identity <=> root.show-reset-identity;
+                        toggle-relay(url, enabled) => {
+                            root.toggle-relay(url, enabled);
+                        }
+                        remove-relay(url) => {
+                            root.remove-relay(url);
+                        }
+                        add-relay(url) => {
+                            root.add-relay(url);
+                        }
+                        reveal-nsec => {
+                            root.reveal-nsec();
+                        }
+                        open-profile(npub) => {
+                            root.open-profile(npub);
+                        }
+                        import-nsec(nsec) => {
+                            root.import-nsec(nsec);
                         }
                     }
                 }
@@ -201,304 +466,69 @@ export component AppWindow inherits Window {
                     horizontal-stretch: 0;
                 }
             }
-        }
 
-        // pages
-        HorizontalLayout {
-            vertical-stretch: 1;
-            padding-left: root.safe-area-insets.left;
-            padding-right: root.safe-area-insets.right;
+            // bottom navigation
             Rectangle {
-                horizontal-stretch: 0;
-            }
-
-            Rectangle {
-                max-width: root.max-content-width;
-                // ---------------------------------------------------------------- market
-                if root.page == 0: MarketPage {
-                    offers: root.offers;
-                    currencies: root.currencies;
-                    filter-side <=> root.filter-side;
-                    filter-currency <=> root.filter-currency;
-                    loading: root.loading;
-                    newcomer: root.newcomer;
-                    refresh-offers => {
-                        root.refresh-offers();
-                    }
-                    filters-changed => {
-                        root.filters-changed();
-                    }
-                    open-offer(id) => {
-                        root.open-offer(id);
-                    }
-                    open-docs => {
-                        root.open-docs();
-                    }
-                }
-
-                // ---------------------------------------------------------------- offer detail
-                if root.page == 1: OfferPage {
-                    current-offer: root.current-offer;
-                    history: root.offer-history;
-                    open-profile(who) => {
-                        root.open-profile(who);
-                    }
-                    contact-maker(id) => {
-                        root.contact-maker(id);
-                    }
-                    close-offer(id) => {
-                        root.close-offer(id);
-                    }
-                    open-history(id) => {
-                        root.open-past-trade(id);
-                    }
-                    back => {
-                        root.page = 0;
-                    }
-                }
-
-                // ---------------------------------------------------------------- create
-                if root.page == 2: CreatePage {
-                    create-currencies: root.create-currencies;
-                    create-apis: root.create-apis;
-                    payment-options <=> root.payment-options;
-                    payment-more <=> root.payment-more;
-                    bitcoin-options <=> root.bitcoin-options;
-                    create-side <=> root.create-side;
-                    create-currency <=> root.create-currency;
-                    create-api <=> root.create-api;
-                    create-premium <=> root.create-premium;
-                    create-amount-min <=> root.create-amount-min;
-                    create-amount-max <=> root.create-amount-max;
-                    create-amount-linked <=> root.create-amount-linked;
-                    create-other-payments <=> root.create-other-payments;
-                    create-relays <=> root.create-relays;
-                    create-publish-relays <=> root.create-publish-relays;
-                    create-description <=> root.create-description;
-                    create-preview: root.create-preview;
-                    create-custom <=> root.create-custom;
-                    create-more-payments <=> root.create-more-payments;
-                    create-currency-changed(c) => {
-                        root.create-currency-changed(c);
-                    }
-                    create-api-changed(a) => {
-                        root.create-api-changed(a);
-                    }
-                    create-premium-changed => {
-                        root.create-premium-changed();
-                    }
-                    toggle-payment(name, checked) => {
-                        root.toggle-payment(name, checked);
-                    }
-                    toggle-bitcoin(name, checked) => {
-                        root.toggle-bitcoin(name, checked);
-                    }
-                    publish-offer => {
-                        root.publish-offer();
-                    }
-                }
-
-                // ---------------------------------------------------------------- trades
-                if root.page == 3: TradesPage {
-                    my-offers: root.my-offers;
-                    ongoing-trades: root.ongoing-trades;
-                    past-trades: root.past-trades;
-                    close-offer(id) => {
-                        root.close-offer(id);
-                    }
-                    open-trade(key) => {
-                        root.open-trade(key);
-                    }
-                    open-past-trade(key) => {
-                        root.open-past-trade(key);
-                    }
-                }
-
-                // ---------------------------------------------------------------- trade
-                if root.page == 4: TradePage {
-                    trade: root.trade;
-                    messages: root.messages;
-                    reports: root.trade-reports;
-                    deal: root.deal;
-                    trade-confirming <=> root.trade-confirming;
-                    trade-details-draft <=> root.trade-details-draft;
-                    trade-concluding <=> root.trade-concluding;
-                    trade-confirm-delete <=> root.trade-confirm-delete;
-                    trade-wide: root.trade-wide;
-                    open-profile(who) => {
-                        root.open-profile(who);
-                    }
-                    archive-trade => {
-                        root.archive-trade();
-                    }
-                    conclude-trade(success, comment) => {
-                        root.conclude-trade(success, comment);
-                    }
-                    send-message(text) => {
-                        root.send-message(text);
-                    }
-                    trade-pick-amount(text) => {
-                        root.trade-pick-amount(text);
-                    }
-                    trade-quote-price(text) => {
-                        root.trade-quote-price(text);
-                    }
-                    trade-pick-bitcoin(m) => {
-                        root.trade-pick-bitcoin(m);
-                    }
-                    trade-pick-payment(m) => {
-                        root.trade-pick-payment(m);
-                    }
-                    trade-give-details(d) => {
-                        root.trade-give-details(d);
-                    }
-                    trade-check-details(d) => {
-                        return root.trade-check-details(d);
-                    }
-                    trade-mark-sent => {
-                        root.trade-mark-sent();
-                    }
-                    delete-report(id) => {
-                        root.delete-report(id);
-                    }
-                    delete-trade => {
-                        root.delete-trade();
-                    }
-                    open-message-report(id) => {
-                        root.open-message-report(id);
-                    }
-                }
-
-                // ---------------------------------------------------------------- profile
-                if root.page == 5: ProfilePage {
-                    profile-npub: root.profile-npub;
-                    profile-name: root.profile-name;
-                    profile-color: root.profile-color;
-                    profile-label: root.profile-label;
-                    profile-blocked: root.profile-blocked;
-                    profile-is-me: root.profile-is-me;
-                    own-reports: root.own-reports;
-                    others-reports: root.others-reports;
-                    others-note: root.others-note;
-                    open-trade(peer) => {
-                        root.open-trade(peer);
-                    }
-                    report-trade(success, comment) => {
-                        root.report-trade(success, comment);
-                    }
-                    set-blocked(blocked) => {
-                        root.set-blocked(blocked);
-                    }
-                    set-label(label) => {
-                        root.set-label(label);
-                    }
-                }
-
-                // ---------------------------------------------------------------- people
-                if root.page == 7: PeoplePage {
-                    people: root.people;
-                    people-filter <=> root.people-filter;
-                    people-filter-changed(t) => {
-                        root.people-filter-changed(t);
-                    }
-                    open-profile(npub) => {
-                        root.open-profile(npub);
-                    }
-                }
-
-                // ---------------------------------------------------------------- settings
-                if root.page == 6: SettingsPage {
-                    npub: root.npub;
-                    nsec: root.nsec;
-                    relays: root.relays;
-                    show-reset-identity <=> root.show-reset-identity;
-                    toggle-relay(url, enabled) => {
-                        root.toggle-relay(url, enabled);
-                    }
-                    remove-relay(url) => {
-                        root.remove-relay(url);
-                    }
-                    add-relay(url) => {
-                        root.add-relay(url);
-                    }
-                    reveal-nsec => {
-                        root.reveal-nsec();
-                    }
-                    open-profile(npub) => {
-                        root.open-profile(npub);
-                    }
-                    import-nsec(nsec) => {
-                        root.import-nsec(nsec);
-                    }
-                }
-            }
-
-            Rectangle {
-                horizontal-stretch: 0;
-            }
-        }
-
-        // bottom navigation
-        Rectangle {
-            height: 1px;
-            background: Palette.border;
-        }
-
-        HorizontalLayout {
-            padding-left: root.safe-area-insets.left;
-            padding-right: root.safe-area-insets.right;
-            padding-bottom: root.safe-area-insets.bottom;
-            Rectangle {
-                horizontal-stretch: 0;
+                height: 1px;
+                background: Palette.border;
             }
 
             HorizontalLayout {
-                max-width: root.max-content-width;
-                padding-left: 4px;
-                padding-right: 4px;
-                NavButton {
-                    text: "Market";
-                    active: root.page == 0 || root.page == 1;
-                    clicked => {
-                        root.page = 0;
+                padding-left: root.safe-area-insets.left;
+                padding-right: root.safe-area-insets.right;
+                padding-bottom: root.safe-area-insets.bottom;
+                Rectangle {
+                    horizontal-stretch: 0;
+                }
+
+                HorizontalLayout {
+                    max-width: root.max-content-width;
+                    padding-left: 4px;
+                    padding-right: 4px;
+                    NavButton {
+                        text: "Market";
+                        active: root.page == 0 || root.page == 1;
+                        clicked => {
+                            root.page = 0;
+                        }
+                    }
+
+                    NavButton {
+                        text: "New offer";
+                        active: root.page == 2;
+                        clicked => {
+                            root.page = 2;
+                        }
+                    }
+
+                    NavButton {
+                        text: "Trades";
+                        active: root.page == 3 || root.page == 4;
+                        clicked => {
+                            root.page = 3;
+                        }
+                    }
+
+                    NavButton {
+                        text: "People";
+                        active: root.page == 7;
+                        clicked => {
+                            root.page = 7;
+                        }
+                    }
+
+                    NavButton {
+                        text: "Settings";
+                        active: root.page == 6;
+                        clicked => {
+                            root.page = 6;
+                        }
                     }
                 }
 
-                NavButton {
-                    text: "New offer";
-                    active: root.page == 2;
-                    clicked => {
-                        root.page = 2;
-                    }
+                Rectangle {
+                    horizontal-stretch: 0;
                 }
-
-                NavButton {
-                    text: "Trades";
-                    active: root.page == 3 || root.page == 4;
-                    clicked => {
-                        root.page = 3;
-                    }
-                }
-
-                NavButton {
-                    text: "People";
-                    active: root.page == 7;
-                    clicked => {
-                        root.page = 7;
-                    }
-                }
-
-                NavButton {
-                    text: "Settings";
-                    active: root.page == 6;
-                    clicked => {
-                        root.page = 6;
-                    }
-                }
-            }
-
-            Rectangle {
-                horizontal-stretch: 0;
             }
         }
     }

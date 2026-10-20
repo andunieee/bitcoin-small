@@ -43,8 +43,8 @@ export struct TradeItem {
     blocked: bool,
 }
 
-// a report we published about a past trade
-export struct PastReportItem {
+// a review we published about a past trade
+export struct PastReviewItem {
     id: string,
     success: bool,
     comment: string,
@@ -54,7 +54,7 @@ export struct PastReportItem {
 
 export struct TradeView {
     ongoing: bool,
-    // over and concluded, waiting for a report or to be archived
+    // over and concluded, waiting for a review or to be archived
     pending: bool,
     peer: string,
     peer-name: string,
@@ -94,8 +94,8 @@ export struct DealView {
     can-send: bool,
     send-hint: string,
     send-label: string,
-    // once both sides have sent their part: why to take our time before reporting
-    report-hint: string,
+    // once both sides have sent their part: why to take our time before reviewing
+    review-hint: string,
 }
 
 export struct MsgItem {
@@ -109,10 +109,10 @@ export struct MsgItem {
     time: string,
 }
 
-export struct ReportItem {
+export struct ReviewItem {
     author-name: string,
     author-color: color,
-    // who it is about, for our own reports on our profile. empty otherwise.
+    // who it is about, for our own reviews on our profile. empty otherwise.
     subject-name: string,
     subject-color: color,
     success: bool,

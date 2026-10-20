@@ -18,7 +18,7 @@ Or [use it in your browser](../app/), with nothing to install. Your key and your
 
 On first launch the app creates a secret key and keeps it on your device. Its public half, your **npub**, is the only thing other people see. You will find both under **Settings → Your key**.
 
-Your reputation (the reports people write about you) is tied to that key. Your reputation is what gives people the trust to trade with you. If you lose it, your reputation starts again from zero.
+Your reputation (the reviews people write about you) is tied to that key. Your reputation is what gives people the trust to trade with you. If you lose it, your reputation starts again from zero.
 
 So at the moment you start getting some reputation you should consider backing up your key.
 
@@ -26,13 +26,13 @@ So at the moment you start getting some reputation you should consider backing u
 
 ## Relays
 
-Relays are the servers that carry offers, messages and reports. The app uses slightly different relays for browsing new offers and then for messaging and publishing reports.
+Relays are the servers that carry offers, messages and reviews. The app uses slightly different relays for browsing new offers and then for messaging and publishing reviews.
 
 The most important relays are those that display the offers in your home screen: we don't want an offer screen flooded with scammers, so by default bitcoin-smol relies solely on the https://nostr.wine relay, which charges a one-time fee for new accounts. This upfront cost makes it so it is not free for users to scam others out of some small amount, get bad ratings on their profile, then just throw away that identity and use a new one to scam again.
 
 ## Practice with XFK
 
-The first time you open the bitcoin-smol app it loads the fake currency **XFK**. It comes with two bot traders that run inside the app. These exist so you can go through the process of taking an offer, specifying your parameters to the other side and finally concluding the offer and publishing a report.
+The first time you open the bitcoin-smol app it loads the fake currency **XFK**. It comes with two bot traders that run inside the app. These exist so you can go through the process of taking an offer, specifying your parameters to the other side and finally concluding the offer and publishing a review.
 
 It also works on the other side: if you open an offer on **XFK** you will get a buyer or seller that is just a bot trying to transact with you.
 

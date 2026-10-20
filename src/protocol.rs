@@ -441,7 +441,7 @@ pub fn deletion(me: &SecretKey, id: &ID, kind: Kind) -> Event {
     .finalize(me)
 }
 
-pub fn trade_report(me: &SecretKey, peer: &PubKey, success: bool, comment: &str) -> Event {
+pub fn trade_review(me: &SecretKey, peer: &PubKey, success: bool, comment: &str) -> Event {
     EventTemplate {
         created_at: now(),
         kind: if success {

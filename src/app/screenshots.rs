@@ -1,5 +1,5 @@
 //! screenshots for the readme and the user guide: the real ui, rendered offscreen by slint's
-//! software renderer, over a made-up market, trades and reports. nothing goes to the network.
+//! software renderer, over a made-up market, trades and reviews. nothing goes to the network.
 //!
 //! `just screenshots` (or `cargo run --features screenshots --bin screenshots -- <dir>`)
 
@@ -246,7 +246,7 @@ fn offer_event(sk: &SecretKey, minutes_ago: u32, o: &OfferSpec) -> Event {
     event(sk, minutes_ago, KIND_OFFER, tags, o.description)
 }
 
-fn report(
+fn review(
     author: &SecretKey,
     subject: &SecretKey,
     days_ago: u32,
@@ -572,7 +572,7 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
         let _ = store
             .history
             .add(&peer, &trade, outcome, comment, ago(days * 24 * 60));
-        store.save_event(&report(me, sk, days, success, comment));
+        store.save_event(&review(me, sk, days, success, comment));
     }
 
     // what the people we trust said about lucas
@@ -587,7 +587,7 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
         ),
         (&ana, 51, true, "$10 strike"),
     ] {
-        store.save_event(&report(author, &lucas, days, success, comment));
+        store.save_event(&review(author, &lucas, days, success, comment));
     }
     store.persist();
 

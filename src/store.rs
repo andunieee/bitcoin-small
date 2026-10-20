@@ -1,5 +1,5 @@
 //! everything this app keeps on the device: the key, the json state (settings, open offers,
-//! ongoing trades), the history of past trades and trade reports, each in a redb database.
+//! ongoing trades), the history of past trades and trade reviews, each in a redb database.
 //!
 //! the key and the json state are small files: a directory on disk, or localStorage in the
 //! browser. the redb databases live on disk, or in the browser's origin private file system.
@@ -27,8 +27,8 @@ pub const DEFAULT_RELAYS: &[&str] = &[
 /// our nip-65 write relays, when we make our first offer and have no relay list yet
 pub const DEFAULT_WRITE_RELAYS: &[&str] = &["wss://relay.primal.net", "wss://nos.lol"];
 
-/// how many of our own reports about someone are enough to not ask anyone else
-pub const ENOUGH_OWN_REPORTS: usize = 20;
+/// how many of our own reviews about someone are enough to not ask anyone else
+pub const ENOUGH_OWN_REVIEWS: usize = 20;
 /// how many of our most-traded-with peers we ask about someone
 pub const TRUSTED_PEERS_TO_ASK: usize = 10;
 /// a successful last trade makes someone trusted for this long
@@ -169,7 +169,7 @@ pub struct State {
     pub app_relays: Vec<String>,
     /// relays shown in the relay menu, enabled or not
     pub known_relays: Vec<String>,
-    /// our nip-65 write relays, where our offers and reports go too. none until we found our relay
+    /// our nip-65 write relays, where our offers and reviews go too. none until we found our relay
     /// list or published one.
     #[serde(default)]
     pub write_relays: Option<Vec<String>>,
@@ -298,8 +298,8 @@ impl Store {
         }
     }
 
-    /// trade reports (8020/8022) by `authors` about `subject`
-    pub fn reports_about(&self, authors: &[PubKey], subject: &PubKey) -> Vec<Event> {
+    /// trade reviews (8020/8022) by `authors` about `subject`
+    pub fn reviews_about(&self, authors: &[PubKey], subject: &PubKey) -> Vec<Event> {
         self.query(Filter {
             kinds: Some(vec![KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS]),
             authors: Some(authors.to_vec()),
@@ -308,8 +308,8 @@ impl Store {
         })
     }
 
-    /// all trade reports (8020/8022) written by `author`
-    pub fn reports_by(&self, author: &PubKey) -> Vec<Event> {
+    /// all trade reviews (8020/8022) written by `author`
+    pub fn reviews_by(&self, author: &PubKey) -> Vec<Event> {
         self.query(Filter {
             kinds: Some(vec![KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS]),
             authors: Some(vec![*author]),
@@ -318,13 +318,13 @@ impl Store {
     }
 
     /// people whose offers we look for on their own relays too: the ones we labeled and never
-    /// reported a failed trade with, and the ones our last report about was a success from the last
+    /// reviewed a failed trade with, and the ones our last review about was a success from the last
     /// six months. never ourselves or someone we blocked.
     pub fn trusted_people(&self, me: &PubKey, now: u32) -> Vec<PubKey> {
-        // subject -> our last report about them
+        // subject -> our last review about them
         let mut last: HashMap<PubKey, &Event> = HashMap::new();
         let mut failed: HashSet<PubKey> = HashSet::new();
-        let mine = self.reports_by(me);
+        let mine = self.reviews_by(me);
         for evt in &mine {
             let Some(pk) = evt.tags.find("p").and_then(|t| t[1].parse::<PubKey>().ok()) else {
                 continue;
@@ -356,7 +356,7 @@ impl Store {
         people
     }
 
-    /// the people we have reported the most successful trades with, best first
+    /// the people we have reviewed the most successful trades with, best first
     pub fn top_trade_partners(&self, me: &PubKey, n: usize) -> Vec<PubKey> {
         let mine = self.query(Filter {
             kinds: Some(vec![KIND_TRADE_SUCCESS]),
@@ -410,7 +410,7 @@ mod tests {
             RedbEventDatabase::from_database(memory()).unwrap(),
             History::from_database(memory()).unwrap(),
         );
-        let report = |about: &PubKey, kind: Kind, days_ago: u32| {
+        let review = |about: &PubKey, kind: Kind, days_ago: u32| {
             store.save_event(
                 &EventTemplate {
                     created_at: Timestamp(now - days_ago * day),
@@ -425,14 +425,14 @@ mod tests {
         let (labeled, labeled_failed, recent, old, recovered, relapsed, blocked) =
             (pk(), pk(), pk(), pk(), pk(), pk(), pk());
 
-        report(&labeled_failed, KIND_TRADE_FAILURE, 400);
-        report(&recent, KIND_TRADE_SUCCESS, 10);
-        report(&old, KIND_TRADE_SUCCESS, 200);
-        report(&recovered, KIND_TRADE_FAILURE, 30);
-        report(&recovered, KIND_TRADE_SUCCESS, 20);
-        report(&relapsed, KIND_TRADE_SUCCESS, 30);
-        report(&relapsed, KIND_TRADE_FAILURE, 20);
-        report(&blocked, KIND_TRADE_SUCCESS, 10);
+        review(&labeled_failed, KIND_TRADE_FAILURE, 400);
+        review(&recent, KIND_TRADE_SUCCESS, 10);
+        review(&old, KIND_TRADE_SUCCESS, 200);
+        review(&recovered, KIND_TRADE_FAILURE, 30);
+        review(&recovered, KIND_TRADE_SUCCESS, 20);
+        review(&relapsed, KIND_TRADE_SUCCESS, 30);
+        review(&relapsed, KIND_TRADE_FAILURE, 20);
+        review(&blocked, KIND_TRADE_SUCCESS, 10);
         for pk in [&labeled, &labeled_failed, &blocked, &me.pubkey()] {
             store.state.labels.insert(pk.to_hex(), "x".into());
         }

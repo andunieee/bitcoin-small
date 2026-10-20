@@ -19,7 +19,7 @@ Where to stop is always your call.
 
 ## Why identities should cost something
 
-If making a new identity is free, a scammer can take $20 from a few people, and once some of them report it, throw the key away and start over with a clean one. A good history only means something if starting over has a cost.
+If making a new identity is free, a scammer can take $20 from a few people, and once some of them warn others about it, throw the key away and start over with a clean one. A good history only means something if starting over has a cost.
 
 Paid relays are one way to add that cost: they only accept posts from keys that paid them a fee, and a high one-time fee makes throwing a key away expensive. Offers you see on such relays come from keys that paid it. Free relays let in offers from keys that cost nothing to create, so weigh a history there accordingly.
 
@@ -35,16 +35,16 @@ The best first peers are people you know from somewhere else: a friend, a friend
 
 When you open someone's profile, you see:
 
-1. **Your own history with them**: every report you wrote about them.
-2. **What the people you trust say**: if you have fewer than 20 reports of your own about them, the app asks the 10 people you have reported the most successful trades with, and shows what they wrote about this person.
+1. **Your own history with them**: every review you wrote about them.
+2. **What the people you trust say**: if you have fewer than 20 reviews of your own about them, the app asks the 10 people you have reviewed the most successful trades with, and shows what they wrote about this person.
 
 <div class="shots one">
-  <img src="../screenshots/profile.png" alt="a profile: your own reports about them, then what the people you trust said">
+  <img src="../screenshots/profile.png" alt="a profile: your own reviews about them, then what the people you trust said">
 </div>
 
-This is why reporting matters. Every successful trade you conclude can bring someone into the circle and increase the amount of successful trades for everybody.
+This is why reviewing matters. Every successful trade you conclude can bring someone into the circle and increase the amount of successful trades for everybody.
 
-Reports from people outside the circle of people you know are ignored, so fake accounts praising each other are irrelevant, a scammer can't just pump up their reputation by creating an army of bots.
+Reviews from people outside the circle of people you know are ignored, so fake accounts praising each other are irrelevant, a scammer can't just pump up their reputation by creating an army of bots.
 
 ## When it goes wrong
 

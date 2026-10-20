@@ -424,7 +424,7 @@ impl Deal {
     pub fn next_step(&self, terms: &OfferTerms) -> String {
         let me = terms.my_role();
         let Some(step) = self.pending().into_iter().next() else {
-            return "both sides have sent their part. no hurry to report it: wait until you are sure you got yours."
+            return "both sides have sent their part. no hurry to review it: wait until you are sure you got yours."
                 .into();
         };
         let mine = step.who(terms) == me;

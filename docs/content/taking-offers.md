@@ -44,7 +44,7 @@ Once you pick the amount, the maker's app answers with the price: the market pri
 
 Anything else you settle by chatting.
 
-The trade appears under **Trades → Ongoing**. Once it's done, tap **Conclude**. The trade moves to **Pending reports**, where it stays until you tap **Report** to say how it went, which publishes a short report about the other person and helps you and the people who trust you next time. There is no hurry, wait until you're sure. **Archive** puts the trade away without a report, from the ongoing trade or from pending reports.
+The trade appears under **Trades → Ongoing**. Once it's done, tap **Conclude**. The trade moves to **Pending reviews**, where it stays until you tap **Review** to say how it went, which publishes a short review about the other person and helps you and the people who trust you next time. There is no hurry, wait until you're sure. **Archive** puts the trade away without a review, from the ongoing trade or from pending reviews.
 
 ## Who sends first
 

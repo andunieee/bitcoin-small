@@ -1,5 +1,5 @@
 import { ScrollView, Palette } from "std-widgets.slint";
-import { OfferItem, HistoryItem, TradeItem, TradeView, DealView, MsgItem, PastReportItem, ReportItem, PersonItem, RelayItem, SentItem, PayItem } from "models.slint";
+import { OfferItem, HistoryItem, TradeItem, TradeView, DealView, MsgItem, PastReviewItem, ReviewItem, PersonItem, RelayItem, SentItem, PayItem } from "models.slint";
 import { Card, Title, Button, NavButton } from "widgets.slint";
 import { SentReport } from "trade_widgets.slint";
 import { MarketPage } from "pages/market.slint";
@@ -11,7 +11,7 @@ import { ProfilePage } from "pages/profile.slint";
 import { PeoplePage } from "pages/people.slint";
 import { SettingsPage } from "pages/settings.slint";
 
-export { OfferItem, HistoryItem, TradeItem, TradeView, DealRow, DealView, MsgItem, PastReportItem, ReportItem, PersonItem, RelayItem, RelayAnswer, SentItem, PayItem } from "models.slint";
+export { OfferItem, HistoryItem, TradeItem, TradeView, DealRow, DealView, MsgItem, PastReviewItem, ReviewItem, PersonItem, RelayItem, RelayAnswer, SentItem, PayItem } from "models.slint";
 
 export component AppWindow inherits Window {
     title: "bitcoin smol";
@@ -80,8 +80,8 @@ export component AppWindow inherits Window {
     in property <[TradeItem]> past-trades;
     in property <TradeView> trade;
     in property <[MsgItem]> messages;
-    // the reports we published about the past trade shown
-    in property <[PastReportItem]> trade-reports;
+    // the reviews we published about the past trade shown
+    in property <[PastReviewItem]> trade-reviews;
     in property <DealView> deal;
     in-out property <string> trade-confirming;
     in-out property <string> trade-details-draft;
@@ -102,7 +102,7 @@ export component AppWindow inherits Window {
     callback conclude-now();
     callback archive-trade();
     callback delete-trade();
-    callback delete-report(string);
+    callback delete-review(string);
 
     // profile
     in property <string> profile-npub;
@@ -111,11 +111,11 @@ export component AppWindow inherits Window {
     in property <string> profile-label;
     in property <bool> profile-blocked;
     in property <bool> profile-is-me;
-    in property <[ReportItem]> own-reports;
-    in property <[ReportItem]> others-reports;
+    in property <[ReviewItem]> own-reviews;
+    in property <[ReviewItem]> others-reviews;
     in property <string> others-note;
     callback open-profile(string);
-    callback report-trade(bool, string);
+    callback review-trade(bool, string);
     callback set-blocked(bool);
     callback set-label(string);
 
@@ -350,7 +350,7 @@ export component AppWindow inherits Window {
                     if root.page == 4: TradePage {
                         trade: root.trade;
                         messages: root.messages;
-                        reports: root.trade-reports;
+                        reviews: root.trade-reviews;
                         deal: root.deal;
                         trade-confirming <=> root.trade-confirming;
                         trade-details-draft <=> root.trade-details-draft;
@@ -393,8 +393,8 @@ export component AppWindow inherits Window {
                         trade-mark-sent => {
                             root.trade-mark-sent();
                         }
-                        delete-report(id) => {
-                            root.delete-report(id);
+                        delete-review(id) => {
+                            root.delete-review(id);
                         }
                         delete-trade => {
                             root.delete-trade();
@@ -412,14 +412,14 @@ export component AppWindow inherits Window {
                         profile-label: root.profile-label;
                         profile-blocked: root.profile-blocked;
                         profile-is-me: root.profile-is-me;
-                        own-reports: root.own-reports;
-                        others-reports: root.others-reports;
+                        own-reviews: root.own-reviews;
+                        others-reviews: root.others-reviews;
                         others-note: root.others-note;
                         open-trade(peer) => {
                             root.open-trade(peer);
                         }
-                        report-trade(success, comment) => {
-                            root.report-trade(success, comment);
+                        review-trade(success, comment) => {
+                            root.review-trade(success, comment);
                         }
                         set-blocked(blocked) => {
                             root.set-blocked(blocked);

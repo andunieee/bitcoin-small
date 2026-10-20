@@ -1,4 +1,4 @@
-//! trades that are over: concluded and waiting for a report, reported, or just archived. they live in a redb database,
+//! trades that are over: concluded and waiting for a review, reviewed, or just archived. they live in a redb database,
 //! while the ongoing ones live in the json state.
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
@@ -14,11 +14,11 @@ const BY_END: TableDefinition<(u32, u64), ()> = TableDefinition::new("trades_by_
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
-    /// concluded, and waiting for the user to report it or archive it
+    /// concluded, and waiting for the user to review it or archive it
     Concluded,
     Success,
     Failure,
-    /// put away without a report
+    /// put away without a review
     Archived,
 }
 
@@ -33,9 +33,9 @@ impl Outcome {
     }
 }
 
-/// a report we published about a past trade, and where, to ask those relays to drop it later
+/// a review we published about a past trade, and where, to ask those relays to drop it later
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PublishedReport {
+pub struct PublishedReview {
     /// event id hex
     pub id: String,
     pub success: bool,
@@ -60,11 +60,11 @@ pub struct PastTrade {
     pub started_by_me: bool,
     pub ended_at: u32,
     pub outcome: Outcome,
-    /// the comment of the report we published, if any
+    /// the comment of the review we published, if any
     pub comment: String,
-    /// every report we published about it, oldest first. we can change our mind and report again.
-    #[serde(default)]
-    pub reports: Vec<PublishedReport>,
+    /// every review we published about it, oldest first. we can change our mind and review again.
+    #[serde(default, alias = "reports")]
+    pub reviews: Vec<PublishedReview>,
     pub messages: Vec<Message>,
 }
 
@@ -102,7 +102,7 @@ impl History {
             ended_at,
             outcome,
             comment: comment.to_string(),
-            reports: vec![],
+            reviews: vec![],
             messages: trade.messages.clone(),
         };
         let json = serde_json::to_string(&past).map_err(|e| e.to_string())?;
@@ -125,29 +125,29 @@ impl History {
         Ok(id as i64)
     }
 
-    /// remember a report we published about a trade. the trade counts as concluded the way the
-    /// report says, until it is deleted.
-    pub fn add_report(&self, id: i64, report: PublishedReport) {
+    /// remember a review we published about a trade. the trade counts as concluded the way the
+    /// review says, until it is deleted.
+    pub fn add_review(&self, id: i64, review: PublishedReview) {
         self.update(id, |t| {
-            t.outcome = if report.success {
+            t.outcome = if review.success {
                 Outcome::Success
             } else {
                 Outcome::Failure
             };
-            t.comment = report.comment.clone();
-            t.reports.push(report);
+            t.comment = review.comment.clone();
+            t.reviews.push(review);
         });
     }
 
-    /// forget one report of a trade and return it. the trade goes by its latest remaining
-    /// report, or back to being archived.
-    pub fn remove_report(&self, id: i64, report_id: &str) -> Option<PublishedReport> {
+    /// forget one review of a trade and return it. the trade goes by its latest remaining
+    /// review, or back to being archived.
+    pub fn remove_review(&self, id: i64, review_id: &str) -> Option<PublishedReview> {
         let mut removed = None;
         self.update(id, |t| {
-            if let Some(i) = t.reports.iter().position(|r| r.id == report_id) {
-                removed = Some(t.reports.remove(i));
+            if let Some(i) = t.reviews.iter().position(|r| r.id == review_id) {
+                removed = Some(t.reviews.remove(i));
             }
-            match t.reports.last() {
+            match t.reviews.last() {
                 Some(last) => {
                     t.outcome = if last.success {
                         Outcome::Success
@@ -165,7 +165,7 @@ impl History {
         removed
     }
 
-    /// put a trade away without a report
+    /// put a trade away without a review
     pub fn archive(&self, id: i64) {
         self.update(id, |t| t.outcome = Outcome::Archived);
     }

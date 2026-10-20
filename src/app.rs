@@ -12,18 +12,18 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::deal::{self, Action, Deal, OfferTerms, Role, Step};
 use crate::form::{self, OfferTemplate};
-use crate::history::{Outcome, PastTrade, PublishedReport};
+use crate::history::{Outcome, PastTrade, PublishedReview};
 use crate::prices::{self, PriceApi, fiat, thousands};
 use crate::protocol::*;
 use crate::relays::{MemoryRelay, Occurrence, Relays, Router};
 use crate::store::{
-    DEFAULT_WRITE_RELAYS, Delivery, ENOUGH_OWN_REPORTS, Message, MyOffer, Store,
+    DEFAULT_WRITE_RELAYS, Delivery, ENOUGH_OWN_REVIEWS, Message, MyOffer, Store,
     TRUSTED_PEERS_TO_ASK, Trade,
 };
 use crate::xfk;
 use crate::{
-    AppWindow, DealRow, DealView, HistoryItem, MsgItem, OfferItem, PastReportItem, PayItem,
-    PersonItem, RelayAnswer, RelayItem, ReportItem, SentItem, TradeItem, TradeView,
+    AppWindow, DealRow, DealView, HistoryItem, MsgItem, OfferItem, PastReviewItem, PayItem,
+    PersonItem, RelayAnswer, RelayItem, ReviewItem, SentItem, TradeItem, TradeView,
 };
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(12);
@@ -392,7 +392,7 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     });
 
     let a = app.clone();
-    ui.on_delete_report(move |id| a.delete_report(&id));
+    ui.on_delete_review(move |id| a.delete_review(&id));
 
     let a = app.clone();
     ui.on_archive_trade(move || a.archive_trade());
@@ -469,7 +469,7 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
     });
 
     let a = app.clone();
-    ui.on_report_trade(move |success, comment| a.report_trade(success, comment.trim()));
+    ui.on_review_trade(move |success, comment| a.review_trade(success, comment.trim()));
 
     let a = app.clone();
     ui.on_set_blocked(move |blocked| {
@@ -632,7 +632,7 @@ impl App {
         self.identity.read().unwrap().1
     }
 
-    /// switch to a key we used before. its reputation comes along, as reports are public, but
+    /// switch to a key we used before. its reputation comes along, as reviews are public, but
     /// whatever it did on other devices doesn't, so we refuse while this key has trades going on.
     fn import_nsec(self: &Arc<Self>, input: &str) {
         let Ok(sk) = input.trim().parse::<SecretKey>() else {
@@ -757,7 +757,7 @@ impl App {
                 let evt = relay_list(&self.sk(), &relays);
                 let app = self.clone();
                 let to = merge_relays(&indexers, &relays);
-                // nothing to report about it, it is published along with whatever needed it
+                // nothing to review about it, it is published along with whatever needed it
                 tokio::spawn(async move {
                     let answers = app.deliver(&to, evt, |_| {}).await;
                     log::info!(
@@ -925,8 +925,8 @@ impl App {
 
     /// fill the relay report popup, open while there is anything in it
     fn render_popup(&self) {
-        let reports = self.popup.lock().unwrap().clone();
-        let entries: Vec<(String, String, Vec<Delivery>, String)> = reports
+        let reviews = self.popup.lock().unwrap().clone();
+        let entries: Vec<(String, String, Vec<Delivery>, String)> = reviews
             .iter()
             .filter_map(|r| match r {
                 Report::Sent(id) => {
@@ -948,7 +948,7 @@ impl App {
                             ""
                         }
                     } else {
-                        "received from them, so there is nothing of ours to report."
+                        "received from them, so there is nothing of ours to review."
                     };
                     let excerpt: String = m.text.chars().take(80).collect();
                     let title = format!(
@@ -1159,7 +1159,7 @@ impl App {
     }
 
     /// one by one, look up the write relays (nip-65) of each person we trust, and their offers
-    /// and trade reports there. the offers show up in the market as they arrive, the reports are
+    /// and trade reviews there. the offers show up in the market as they arrive, the reviews are
     /// kept in the local database.
     async fn fetch_trusted_offers(self: &Arc<Self>) {
         let people = {
@@ -1192,7 +1192,7 @@ impl App {
             }
 
             let since = Timestamp(now().0.saturating_sub(OFFER_TTL_SECS));
-            let (events, reports) = tokio::join!(
+            let (events, reviews) = tokio::join!(
                 self.fetch(
                     relays.clone(),
                     Filter {
@@ -1212,10 +1212,10 @@ impl App {
                     },
                 ),
             );
-            // their reports, for when we look at the people they traded with
+            // their reviews, for when we look at the people they traded with
             {
                 let store = self.store.lock().unwrap();
-                for evt in reports
+                for evt in reviews
                     .iter()
                     .filter(|e| e.pubkey == pk && e.verify_signature())
                 {
@@ -2234,7 +2234,7 @@ impl App {
             return;
         };
         let store = self.store.lock().unwrap();
-        let (peer, view, reports) = match which {
+        let (peer, view, reviews) = match which {
             TradeRef::Ongoing(peer) => {
                 let Some(t) = store.state.trades.get(&peer.to_hex()) else {
                     return;
@@ -2259,10 +2259,10 @@ impl App {
                 let Ok(peer) = t.peer.parse::<PubKey>() else {
                     return;
                 };
-                let reports: Vec<PastReportItem> = t
-                    .reports
+                let reviews: Vec<PastReviewItem> = t
+                    .reviews
                     .iter()
-                    .map(|r| PastReportItem {
+                    .map(|r| PastReviewItem {
                         id: r.id.clone().into(),
                         success: r.success,
                         comment: r.comment.clone().into(),
@@ -2276,7 +2276,7 @@ impl App {
                     summary: t.offer_summary.trim_start_matches("maker ").into(),
                     ..Default::default()
                 };
-                (peer, (view, t.offer, t.messages, None), reports)
+                (peer, (view, t.offer, t.messages, None), reviews)
             }
         };
         let (mut view, terms, messages, check) = view;
@@ -2316,7 +2316,7 @@ impl App {
                 None => DealView::default(),
             });
             ui.set_messages(ModelRc::new(VecModel::from(msgs)));
-            ui.set_trade_reports(ModelRc::new(VecModel::from(reports)));
+            ui.set_trade_reviews(ModelRc::new(VecModel::from(reviews)));
         });
     }
 
@@ -2579,7 +2579,7 @@ impl App {
         ));
     }
 
-    /// report the trade being looked at: it ends if it is ongoing, and a past one can be reported
+    /// review the trade being looked at: it ends if it is ongoing, and a past one can be reviewed
     /// again, whether it was archived or concluded
     fn conclude_trade(self: &Arc<Self>, outcome: Outcome, comment: &str) {
         let current = *self.current_trade.lock().unwrap();
@@ -2590,9 +2590,9 @@ impl App {
                     return;
                 };
                 if let Ok(peer) = t.peer.parse() {
-                    self.publish_report(peer, outcome == Outcome::Success, comment, Some(id));
+                    self.publish_review(peer, outcome == Outcome::Success, comment, Some(id));
                 }
-                // looking at the trade, and its status changes when the report is recorded
+                // looking at the trade, and its status changes when the review is recorded
                 let _ = self
                     .ui
                     .upgrade_in_event_loop(|ui| ui.set_trade_concluding(false));
@@ -2601,27 +2601,27 @@ impl App {
         }
     }
 
-    /// ask the relays we published one report of this past trade to to drop it
-    fn delete_report(self: &Arc<Self>, report_id: &str) {
+    /// ask the relays we published one review of this past trade to to drop it
+    fn delete_review(self: &Arc<Self>, review_id: &str) {
         let Some(TradeRef::Past(id)) = *self.current_trade.lock().unwrap() else {
             return;
         };
-        let Some(report) = ({
+        let Some(review) = ({
             let store = self.store.lock().unwrap();
-            let report = store.history.remove_report(id, report_id);
-            if let Some(rid) = report.as_ref().and_then(|r| r.id.parse().ok()) {
+            let review = store.history.remove_review(id, review_id);
+            if let Some(rid) = review.as_ref().and_then(|r| r.id.parse().ok()) {
                 store.forget_event(&rid);
             }
-            report
+            review
         }) else {
             return;
         };
         self.render_trade();
         self.render_trades();
-        let Ok(rid) = report.id.parse() else {
+        let Ok(rid) = review.id.parse() else {
             return;
         };
-        let kind = if report.success {
+        let kind = if review.success {
             KIND_TRADE_SUCCESS
         } else {
             KIND_TRADE_FAILURE
@@ -2629,13 +2629,13 @@ impl App {
         let evt = deletion(&self.sk(), &rid, kind);
         let app = self.clone();
         tokio::spawn(async move {
-            let (ok, total) = app.publish("report deletion", report.relays, evt).await;
-            app.status(format!("report deleted from {}/{total} relays", ok.len()));
+            let (ok, total) = app.publish("review deletion", review.relays, evt).await;
+            app.status(format!("review deleted from {}/{total} relays", ok.len()));
         });
     }
 
-    /// put away the trade being looked at without a report: an ongoing one ends, and a concluded
-    /// one that was waiting for its report stops waiting
+    /// put away the trade being looked at without a review: an ongoing one ends, and a concluded
+    /// one that was waiting for its review stops waiting
     fn archive_trade(self: &Arc<Self>) {
         let current = *self.current_trade.lock().unwrap();
         match current {
@@ -2648,7 +2648,7 @@ impl App {
         }
     }
 
-    /// end the ongoing trade: concluded to be reported later, with a public report (success or
+    /// end the ongoing trade: concluded to be reviewed later, with a public review (success or
     /// failure), or just archived. it moves from the json state to the history database and we
     /// stop listening.
     fn end_trade(self: &Arc<Self>, outcome: Outcome, comment: &str) {
@@ -2683,7 +2683,7 @@ impl App {
         if matches!(outcome, Outcome::Success | Outcome::Failure)
             && let Ok(peer) = trade_peer.parse()
         {
-            self.publish_report(peer, outcome == Outcome::Success, comment, Some(past_id));
+            self.publish_review(peer, outcome == Outcome::Success, comment, Some(past_id));
         }
         self.leave_trade();
     }
@@ -2781,7 +2781,7 @@ impl App {
                     blocked: false,
                 })
             };
-            // concluded ones stay here until reported or archived, however many they are
+            // concluded ones stay here until reviewed or archived, however many they are
             let (waiting, rest): (Vec<_>, Vec<_>) = store
                 .history
                 .list(usize::MAX)
@@ -2926,15 +2926,15 @@ impl App {
             ui.set_profile_blocked(blocked);
             ui.set_profile_label(label.into());
             ui.set_profile_is_me(is_me);
-            ui.set_own_reports(ModelRc::default());
-            ui.set_others_reports(ModelRc::default());
+            ui.set_own_reviews(ModelRc::default());
+            ui.set_others_reviews(ModelRc::default());
             ui.set_others_note("".into());
             ui.set_page(5);
         });
         self.render_profile(who, true);
     }
 
-    /// our own reports about them first. if those are few, what our most frequent successful
+    /// our own reviews about them first. if those are few, what our most frequent successful
     /// trade partners have said about them.
     fn render_profile(self: &Arc<Self>, who: PubKey, ask_relays: bool) {
         let is_me = who == self.me();
@@ -2942,10 +2942,10 @@ impl App {
             let store = self.store.lock().unwrap();
             let labels = store.state.labels.clone();
             if is_me {
-                (store.reports_by(&self.me()), vec![], vec![], labels)
+                (store.reviews_by(&self.me()), vec![], vec![], labels)
             } else {
-                let own = store.reports_about(&[self.me()], &who);
-                let trusted: Vec<PubKey> = if own.len() < ENOUGH_OWN_REPORTS {
+                let own = store.reviews_about(&[self.me()], &who);
+                let trusted: Vec<PubKey> = if own.len() < ENOUGH_OWN_REVIEWS {
                     store
                         .top_trade_partners(&self.me(), TRUSTED_PEERS_TO_ASK + 1)
                         .into_iter()
@@ -2958,7 +2958,7 @@ impl App {
                 let others = if trusted.is_empty() {
                     vec![]
                 } else {
-                    store.reports_about(&trusted, &who)
+                    store.reviews_about(&trusted, &who)
                 };
                 (own, trusted, others, labels)
             }
@@ -2966,10 +2966,10 @@ impl App {
 
         let note = if is_me {
             String::new()
-        } else if own.len() >= ENOUGH_OWN_REPORTS {
-            format!("you have {} reports of your own, that's enough.", own.len())
+        } else if own.len() >= ENOUGH_OWN_REVIEWS {
+            format!("you have {} reviews of your own, that's enough.", own.len())
         } else if trusted.is_empty() {
-            "you haven't reported any successful trades yet, so there is nobody you trust to ask."
+            "you haven't reviewed any successful trades yet, so there is nobody you trust to ask."
                 .into()
         } else if ask_relays {
             format!(
@@ -2988,11 +2988,11 @@ impl App {
             )
         };
 
-        let own_items: Vec<ReportItem> =
-            own.iter().map(|e| report_item(&labels, e, is_me)).collect();
-        let other_items: Vec<ReportItem> = others
+        let own_items: Vec<ReviewItem> =
+            own.iter().map(|e| review_item(&labels, e, is_me)).collect();
+        let other_items: Vec<ReviewItem> = others
             .iter()
-            .map(|e| report_item(&labels, e, false))
+            .map(|e| review_item(&labels, e, false))
             .collect();
 
         let app = self.clone();
@@ -3000,8 +3000,8 @@ impl App {
             if *app.current_profile.lock().unwrap() != Some(who) {
                 return;
             }
-            ui.set_own_reports(ModelRc::new(VecModel::from(own_items)));
-            ui.set_others_reports(ModelRc::new(VecModel::from(other_items)));
+            ui.set_own_reviews(ModelRc::new(VecModel::from(own_items)));
+            ui.set_others_reviews(ModelRc::new(VecModel::from(other_items)));
             ui.set_others_note(note.into());
         });
 
@@ -3031,18 +3031,18 @@ impl App {
         }
     }
 
-    fn report_trade(self: &Arc<Self>, success: bool, comment: &str) {
+    fn review_trade(self: &Arc<Self>, success: bool, comment: &str) {
         let Some(peer) = *self.current_profile.lock().unwrap() else {
             return;
         };
-        self.publish_report(peer, success, comment, None);
+        self.publish_review(peer, success, comment, None);
         self.render_profile(peer, false);
     }
 
-    /// publish a report about `peer` to our discovery relays, their read relays and our write
+    /// publish a review about `peer` to our discovery relays, their read relays and our write
     /// relays. if it is about a past trade, `past` is remembered along with where it went, to
     /// delete it from there later.
-    fn publish_report(
+    fn publish_review(
         self: &Arc<Self>,
         peer: PubKey,
         success: bool,
@@ -3052,7 +3052,7 @@ impl App {
         if peer == self.me() {
             return;
         }
-        let evt = trade_report(&self.sk(), &peer, success, comment);
+        let evt = trade_review(&self.sk(), &peer, success, comment);
         // what we say about the bots stays in the practice market, and out of whom we trust
         let practice = self.xfk_people.contains(&peer);
         if !practice {
@@ -3071,15 +3071,15 @@ impl App {
             };
             let id = evt.id.to_hex();
             let created_at = evt.created_at.0;
-            let (ok, total) = app.publish("trade report", relays, evt).await;
+            let (ok, total) = app.publish("trade review", relays, evt).await;
             app.status(format!(
-                "trade report published to {}/{total} relays",
+                "trade review published to {}/{total} relays",
                 ok.len()
             ));
             if let Some(past) = past {
-                app.store.lock().unwrap().history.add_report(
+                app.store.lock().unwrap().history.add_review(
                     past,
-                    PublishedReport {
+                    PublishedReview {
                         id,
                         success,
                         comment,
@@ -3119,11 +3119,11 @@ impl App {
 
 // ---------------------------------------------------------------------------------- helpers
 
-fn report_item(labels: &BTreeMap<String, String>, e: &Event, show_subject: bool) -> ReportItem {
+fn review_item(labels: &BTreeMap<String, String>, e: &Event, show_subject: bool) -> ReviewItem {
     let subject = show_subject
         .then(|| e.tags.find("p").and_then(|t| t[1].parse::<PubKey>().ok()))
         .flatten();
-    ReportItem {
+    ReviewItem {
         author_name: display_name(labels, &e.pubkey).into(),
         author_color: key_color(&e.pubkey),
         subject_name: subject
@@ -3396,12 +3396,12 @@ fn deal_view(
         ))
     };
     if deal.concluded() {
-        view.report_hint = "Both sides say they have sent their part. There is no hurry to report: \
+        view.review_hint = "Both sides say they have sent their part. There is no hurry to review: \
              wait until you have really checked that you got what you were owed. If the payment \
              can be reversed (cards, PayPal, some bank transfers), consider waiting a day or two \
-             for a reversal before you rate them, as a report is public. You can conclude the \
-             trade now and report from it later, or archive it if you never will, and delete a \
-             report if you change your mind."
+             for a reversal before you rate them, as a review is public. You can conclude the \
+             trade now and review it later, or archive it if you never will, and delete a \
+             review if you change your mind."
             .into();
     }
     for step in deal.available(terms, me) {
@@ -3470,7 +3470,7 @@ fn deal_view(
 
 fn past_status(t: &PastTrade) -> String {
     let outcome = match t.outcome {
-        Outcome::Concluded => "concluded, report pending",
+        Outcome::Concluded => "concluded, review pending",
         Outcome::Success => "✓ concluded: success",
         Outcome::Failure => "✗ concluded: failure",
         Outcome::Archived => "archived",

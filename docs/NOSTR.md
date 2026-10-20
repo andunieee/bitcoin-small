@@ -1,7 +1,7 @@
 # bitcoin-smol protocol
 
 How bitcoin-smol uses nostr. Implementation lives in `../src/protocol.rs` (event kinds, offer
-encoding, the DM scheme, pings, reports), with prices in `../src/prices.rs`, the deal state in
+encoding, the DM scheme, pings, reviews), with prices in `../src/prices.rs`, the deal state in
 `../src/deal.rs` and trust queries in `../src/store.rs`.
 
 Event kinds used:
@@ -11,8 +11,8 @@ Event kinds used:
 | `6012`  | offer                                             |
 | `8021`  | DM, encrypted with the conversation key           |
 | `28022` | ping: "there is a DM for you from me"             |
-| `8022`  | trade report: success                             |
-| `8020`  | trade report: failure                             |
+| `8022`  | trade review: success                             |
+| `8020`  | trade review: failure                             |
 | `5`     | NIP-09 deletion, to close an offer before expiry  |
 
 ## Identity
@@ -73,7 +73,7 @@ deletion (kind `5`, with `["e", <offer id>]` and `["k", "6012"]`) to those relay
 
 ## Relays
 
-The app uses a set of "app relays" to discover and publish new offers and trade reports. By default this is only `nostr.wine`, a paid relay, so identities are not free. The Settings menu lets you switch relays on and off, remove them, and add your own.
+The app uses a set of "app relays" to discover and publish new offers and trade reviews. By default this is only `nostr.wine`, a paid relay, so identities are not free. The Settings menu lets you switch relays on and off, remove them, and add your own.
 
 ## DMs: a shared-key scheme (kinds `8021` and `28022`)
 
@@ -150,24 +150,24 @@ says so, and the maker sends theirs after that. Each value is set once. Actions 
 or outside the offer's terms are ignored. The maker learns which offer the trade is about from the `e` tag on the
 taker's messages.
 
-## Trade reports (kinds `8022` and `8020`)
+## Trade reviews (kinds `8022` and `8020`)
 
-When a trade is over, either party can publish a report about the other:
+When a trade is over, either party can publish a review about the other:
 
 ```jsonc
 { "kind": 8022, "tags": [["p", "<other party>"]], "content": "$5 via UPI, fast" }  // success
 { "kind": 8020, "tags": [["p", "<other party>"]], "content": "never paid" }        // failure
 ```
 
-Reports are signed with your real key. The app stores them in a local event database and publishes them to your app relays and your write relays.
+Reviews are signed with your real key. The app stores them in a local event database and publishes them to your app relays and your write relays.
 
 ## Deciding who to trust
 
 When you open someone's profile, the app shows:
 
 1. **Your history with them**: every `8020` or `8022` that *you* wrote about them, read from the local database.
-2. If you have fewer than 20 of those, **what the people you trust say**. The app ranks the people you have reported
-   successful trades with (your own `8022`s) by number of reports, takes the top 10, and asks your relays for
+2. If you have fewer than 20 of those, **what the people you trust say**. The app ranks the people you have reviewed
+   successful trades with (your own `8022`s) by number of reviews, takes the top 10, and asks your relays for
    `{"kinds": [8020, 8022], "authors": [<those 10>], "#p": [<this person>]}`. It shows any results with their authors
    and caches them locally.
 

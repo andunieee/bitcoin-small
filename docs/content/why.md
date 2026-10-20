@@ -5,7 +5,7 @@ weight = 1
 nav = "why"
 +++
 
-For bitcoin to become the money people use everywhere, people everywhere need a way to move between it and the money they are paid in and pay their bills with: pesos in the Philippines, naira in Nigeria, dollars, euros. Today that usually means an exchange, and an exchange wants your ID, your address and your bank details. It can freeze your account, it may not serve your country at all, and it reports what you do to the enemies of Bitcoin.
+For bitcoin to become the money people use everywhere, people everywhere need a way to move between it and the money they are paid in and pay their bills with: pesos in the Philippines, naira in Nigeria, dollars, euros. Today that usually means an exchange, and an exchange wants your ID, your address and your bank details. It can freeze your account, it may not serve your country at all, and it reviews what you do to the enemies of Bitcoin.
 
 ## Compared to Bisq and RoboSats
 
@@ -29,7 +29,7 @@ bitcoin-smol welcomes newcomers. You trust them with a few dollars and let them 
 
 On an escrow platform, every trade is a trade with a possible scammer. Both sides stay wary, follow strict timeouts, use only the payment methods the platform accepts, keep receipts, and call in the platform's moderators when something goes wrong.
 
-Once you trust someone, or someone you trust vouches for them with their reports, none of that is needed. Trades just flow: you agree on the terms in a chat and do them.
+Once you trust someone, or someone you trust vouches for them with their reviews, none of that is needed. Trades just flow: you agree on the terms in a chat and do them.
 
 Some frauds also get around escrow, like payment reversals or triangulation fraud, where a scammer has a third person pay you with money that is later pulled back. Here they are just another way of cheating someone, and they cost the scammer their reputation like any other.
 

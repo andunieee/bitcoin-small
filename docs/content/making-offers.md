@@ -45,7 +45,7 @@ It is always the taker who sends first, so you always send second. If your offer
 
 ## Filtering people
 
-You don't have to trade with everyone who writes to you. Check the history you have with them and the reports of the people you trust, exactly as you would when [taking an offer](../taking-offers/).
+You don't have to trade with everyone who writes to you. Check the history you have with them and the reviews of the people you trust, exactly as you would when [taking an offer](../taking-offers/).
 
 The taker's obligation to send first makes your role the safer: whatever they want from you, they put their part in before you put yours in.
 

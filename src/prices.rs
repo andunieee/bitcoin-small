@@ -164,8 +164,11 @@ async fn fetch_mempool(cur: &str) -> Result<f64, String> {
         .ok_or_else(|| format!("mempool has no price for {cur}"))
 }
 
+/// the most a premium can be above or below the market price, in percent
+pub const MAX_PREMIUM: f64 = 15.0;
+
 /// parse a premium like "+1%", "-0.5%", "2" into a percentage; anything empty means 0%. it has
-/// to stay above -100%, where the price would reach zero.
+/// to be within MAX_PREMIUM either way, offers beyond that are ignored.
 pub fn parse_premium(s: &str) -> Option<f64> {
     let s = s.trim().trim_end_matches('%').trim();
     if s.is_empty() {
@@ -174,7 +177,7 @@ pub fn parse_premium(s: &str) -> Option<f64> {
     s.trim_start_matches('+')
         .parse::<f64>()
         .ok()
-        .filter(|v| v.is_finite() && *v > -100.0)
+        .filter(|v| v.is_finite() && v.abs() <= MAX_PREMIUM)
 }
 
 /// canonical form of a premium for the offer tag
@@ -233,8 +236,10 @@ mod tests {
         assert_eq!(parse_premium(""), Some(0.0));
         assert_eq!(parse_premium("x"), None);
         assert_eq!(parse_premium("-100%"), None);
-        assert_eq!(parse_premium("-150"), None);
-        assert_eq!(parse_premium("-99.5%"), Some(-99.5));
+        assert_eq!(parse_premium("-15.1"), None);
+        assert_eq!(parse_premium("15.1%"), None);
+        assert_eq!(parse_premium("-15%"), Some(-15.0));
+        assert_eq!(parse_premium("+15"), Some(15.0));
         assert_eq!(format_premium(1.0), "+1%");
         assert_eq!(format_premium(-2.5), "-2.5%");
         assert_eq!(apply_premium(100.0, 1.0), 101.0);

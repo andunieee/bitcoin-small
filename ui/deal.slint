@@ -1,6 +1,6 @@
 import { LineEdit, TextEdit } from "std-widgets.slint";
 import { DealView } from "models.slint";
-import { Card, Muted, Tip, Button, Choices } from "widgets.slint";
+import { Card, Muted, Selectable, Tip, Button, Choices } from "widgets.slint";
 
 // where a trade stands and the forms that move it forward. picking something sends a message.
 export component DealPanel inherits VerticalLayout {
@@ -55,7 +55,7 @@ export component DealPanel inherits VerticalLayout {
                         text: row.label;
                     }
 
-                    Text {
+                    Selectable {
                         text: row.value;
                         font-size: 13px;
                         wrap: word-wrap;
@@ -68,7 +68,7 @@ export component DealPanel inherits VerticalLayout {
                         text: row.label2;
                     }
 
-                    Text {
+                    Selectable {
                         text: row.value2;
                         font-size: 13px;
                         wrap: word-wrap;

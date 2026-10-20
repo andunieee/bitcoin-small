@@ -7,6 +7,14 @@ export component Card inherits Rectangle {
     border-color: Palette.border;
 }
 
+// text that can be selected and copied
+export component Selectable inherits TextInput {
+    color: Palette.foreground;
+    read-only: true;
+    wrap: word-wrap;
+    single-line: false;
+}
+
 export component Title inherits Text {
     font-size: 20px;
     font-weight: 700;

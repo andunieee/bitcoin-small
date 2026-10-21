@@ -27,6 +27,12 @@ export component ProfilePage inherits ScrollView {
 
     content-width: self.visible-width;
 
+    // what is typed in the label field: only overwritten when the stored label changes
+    property <string> label-draft: root.profile-label;
+    changed profile-label => {
+        root.label-draft = root.profile-label;
+    }
+
     VerticalLayout {
         width: root.visible-width;
         padding: 16px;
@@ -48,8 +54,8 @@ export component ProfilePage inherits ScrollView {
 
         if !root.profile-is-me: HorizontalLayout {
             spacing: 8px;
-            label-input := LineEdit {
-                text: root.profile-label;
+            LineEdit {
+                text <=> root.label-draft;
                 placeholder-text: "label, only you see it";
                 accepted => {
                     root.set-label(self.text);
@@ -58,9 +64,9 @@ export component ProfilePage inherits ScrollView {
 
             Button {
                 text: "Save";
-                enabled: label-input.text != root.profile-label;
+                enabled: root.label-draft != root.profile-label;
                 clicked => {
-                    root.set-label(label-input.text);
+                    root.set-label(root.label-draft);
                 }
             }
         }

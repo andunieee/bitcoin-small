@@ -1,6 +1,6 @@
 import { ScrollView, Palette } from "std-widgets.slint";
 import { OfferItem, HistoryItem } from "../models.slint";
-import { Card, Title, Muted, SideBadge, Identity, Button } from "../widgets.slint";
+import { Card, Title, Muted, SideBadge, Identity, Button, RawTrigger } from "../widgets.slint";
 
 export component OfferPage inherits ScrollView {
     in property <OfferItem> current-offer;
@@ -10,6 +10,7 @@ export component OfferPage inherits ScrollView {
     callback close-offer(string);
     callback open-history(string);
     callback back();
+    callback open-raw(string, string);
 
     content-width: self.visible-width;
 
@@ -30,6 +31,12 @@ export component OfferPage inherits ScrollView {
         }
 
         Card {
+            RawTrigger {
+                raw => {
+                    root.open-raw("offer", root.current-offer.id);
+                }
+            }
+
             VerticalLayout {
                 padding: 12px;
                 spacing: 6px;

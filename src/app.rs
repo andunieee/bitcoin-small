@@ -86,6 +86,8 @@ enum Report {
     Sent(u64),
     /// a message of a trade, by its id. ours carry how each relay took it.
     Message(TradeRef, String),
+    /// an offer or a review as it came from the relays: what it is, and its json
+    Raw(String, String),
 }
 
 struct App {
@@ -535,6 +537,13 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
         }
     });
 
+    let a = app.clone();
+    ui.on_open_raw(move |kind, id| {
+        if let Some(report) = a.raw_report(&kind, &id) {
+            a.show_report(report, true);
+        }
+    });
+
     ui.on_open_relay_site(|host| {
         let url = format!("http://{host}");
         if let Err(err) = webbrowser::open(&url) {
@@ -979,6 +988,43 @@ impl App {
         self.render_popup();
     }
 
+    /// the raw event of an offer or a review, by its id
+    fn raw_report(&self, kind: &str, id: &str) -> Option<Report> {
+        let id = ID::from_hex(id).ok()?;
+        match kind {
+            "offer" => {
+                let find = |offers: &Mutex<Vec<Offer>>| {
+                    offers.lock().unwrap().iter().find(|o| o.id == id).cloned()
+                };
+                let o = find(&self.offers).or_else(|| find(&self.trusted_offers))?;
+                Some(Report::Raw(
+                    format!("offer: {} {}", o.side.as_str(), o.currency),
+                    o.raw,
+                ))
+            }
+            "review" => {
+                let evt = self
+                    .store
+                    .lock()
+                    .unwrap()
+                    .query(Filter {
+                        ids: Some(vec![id]),
+                        limit: Some(1),
+                        ..Default::default()
+                    })
+                    .into_iter()
+                    .next()?;
+                let what = if evt.kind == KIND_TRADE_SUCCESS {
+                    "successful trade"
+                } else {
+                    "failed trade"
+                };
+                Some(Report::Raw(format!("review: {what}"), evt.to_string()))
+            }
+            _ => None,
+        }
+    }
+
     /// refresh the popup if it shows `report`
     fn rerender_report(&self, report: &Report) {
         if self.popup.lock().unwrap().contains(report) {
@@ -1002,6 +1048,12 @@ impl App {
                         String::new(),
                     ))
                 }
+                Report::Raw(title, json) => Some((
+                    title.clone(),
+                    json.clone(),
+                    vec![],
+                    "the event as it came from the relays.".into(),
+                )),
                 Report::Message(which, id) => {
                     let m = self.find_message(which.clone(), id)?;
                     let note = if m.mine {
@@ -3270,6 +3322,7 @@ fn review_item(labels: &BTreeMap<String, String>, e: &Event, show_subject: bool)
         .then(|| e.tags.find("p").and_then(|t| t[1].parse::<PubKey>().ok()))
         .flatten();
     ReviewItem {
+        id: e.id.to_hex().into(),
         author_name: display_name(labels, &e.pubkey).into(),
         author_color: key_color(&e.pubkey),
         subject_name: subject

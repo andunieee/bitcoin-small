@@ -1,6 +1,6 @@
 import { LineEdit, ScrollView } from "std-widgets.slint";
 import { ReviewItem } from "../models.slint";
-import { Card, Title, Muted, Identity, Button } from "../widgets.slint";
+import { Card, Title, Muted, Identity, Button, RawTrigger } from "../widgets.slint";
 
 export component ProfilePage inherits ScrollView {
     in property <string> profile-npub;
@@ -16,6 +16,7 @@ export component ProfilePage inherits ScrollView {
     callback review-trade(bool, string);
     callback set-blocked(bool);
     callback set-label(string);
+    callback open-raw(string, string);
 
     content-width: self.visible-width;
 
@@ -84,6 +85,12 @@ export component ProfilePage inherits ScrollView {
             text: "you have never traded with them.";
         }
         for rep in root.own-reviews: Card {
+            RawTrigger {
+                raw => {
+                    root.open-raw("review", rep.id);
+                }
+            }
+
             HorizontalLayout {
                 padding: 8px;
                 spacing: 8px;
@@ -131,6 +138,12 @@ export component ProfilePage inherits ScrollView {
         }
 
         for rep in root.others-reviews: Card {
+            RawTrigger {
+                raw => {
+                    root.open-raw("review", rep.id);
+                }
+            }
+
             HorizontalLayout {
                 padding: 8px;
                 spacing: 8px;

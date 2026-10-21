@@ -7,6 +7,7 @@ import {
     SideBadge,
     Identity,
     Button,
+    RawTrigger,
 } from "../widgets.slint";
 
 export component MarketPage inherits VerticalLayout {
@@ -19,6 +20,7 @@ export component MarketPage inherits VerticalLayout {
     callback refresh-offers();
     callback filters-changed();
     callback open-offer(string);
+    callback open-raw(string, string);
     callback open-docs();
 
     padding: 16px;
@@ -75,10 +77,15 @@ export component MarketPage inherits VerticalLayout {
             padding-bottom: 8px;
             padding-right: 6px;
             Card {
-                TouchArea {
+                RawTrigger {
                     mouse-cursor: pointer;
                     clicked => {
-                        root.open-offer(offer.id);
+                        if !self.held {
+                            root.open-offer(offer.id);
+                        }
+                    }
+                    raw => {
+                        root.open-raw("offer", offer.id);
                     }
                 }
 

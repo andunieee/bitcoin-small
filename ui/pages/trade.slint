@@ -6,7 +6,7 @@ import {
     Palette,
 } from "std-widgets.slint";
 import { TradeView, MsgItem, PastReviewItem, DealView } from "../models.slint";
-import { Card, Muted, Selectable, Identity, Button } from "../widgets.slint";
+import { Card, Muted, Selectable, Identity, Button, RawTrigger } from "../widgets.slint";
 import { DealPanel } from "../deal.slint";
 import { TradeActions } from "../trade_widgets.slint";
 
@@ -34,6 +34,7 @@ export component TradePage inherits VerticalLayout {
     callback trade-mark-sent();
     callback delete-trade();
     callback delete-review(string);
+    callback open-raw(string, string);
     callback open-message-report(string);
 
     // whether the chat is scrolled to (near) the end, so new messages should keep it there
@@ -148,9 +149,16 @@ export component TradePage inherits VerticalLayout {
             spacing: 4px;
             for r in root.reviews: HorizontalLayout {
                 spacing: 8px;
+
                 Text {
                     text: r.success ? "✓" : "✗";
                     font-weight: 700;
+                    // no room behind the row to hold on, so the check mark does
+                    RawTrigger {
+                        raw => {
+                            root.open-raw("review", r.id);
+                        }
+                    }
                 }
 
                 Text {
@@ -244,6 +252,12 @@ export component TradePage inherits VerticalLayout {
                         height: plain-layout.preferred-height;
                         border-radius: 10px;
                         background: msg.mine ? #f7931a33 : Palette.alternate-background;
+                        RawTrigger {
+                            raw => {
+                                root.open-message-report(msg.id);
+                            }
+                        }
+
                         plain-layout := VerticalLayout {
                             padding-top: 8px;
                             padding-bottom: 8px;
@@ -275,6 +289,12 @@ export component TradePage inherits VerticalLayout {
                         border-color: #1565c0;
                         background: #1565c022;
                         opacity: msg.ignored ? 0.5 : 1;
+                        RawTrigger {
+                            raw => {
+                                root.open-message-report(msg.id);
+                            }
+                        }
+
                         meta-layout := VerticalLayout {
                             padding-top: 8px;
                             padding-bottom: 8px;

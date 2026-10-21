@@ -7,6 +7,41 @@ export component Card inherits Rectangle {
     border-color: Palette.border;
 }
 
+// a touch area that also reports a right click or a long press, to inspect what it shows.
+// clicked doesn't fire as a click when it was a long press, check `held` there
+export component RawTrigger inherits TouchArea {
+    callback raw();
+    out property <bool> held;
+    timer := Timer {
+        interval: 600ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.held = true;
+            root.raw();
+        }
+    }
+
+    pointer-event(e) => {
+        if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
+            root.raw();
+        } else if e.button == PointerEventButton.left {
+            if e.kind == PointerEventKind.down {
+                root.held = false;
+                timer.running = true;
+            } else {
+                timer.running = false;
+            }
+        } else if e.kind == PointerEventKind.cancel {
+            timer.running = false;
+        }
+    }
+
+    moved => {
+        timer.running = false;
+    }
+}
+
 // text that can be selected and copied
 export component Selectable inherits TextInput {
     color: Palette.foreground;

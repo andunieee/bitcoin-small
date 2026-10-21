@@ -160,6 +160,8 @@ pub struct Offer {
     pub bitcoin_methods: Vec<String>,
     pub relays: Vec<String>,
     pub description: String,
+    /// the event it came from, as json
+    pub raw: String,
 }
 
 pub struct NewOffer {
@@ -270,6 +272,7 @@ impl Offer {
             bitcoin_methods: evt.tags.find_all("bitcoin").map(|t| t[1].clone()).collect(),
             relays,
             description: evt.content.clone(),
+            raw: evt.to_string(),
         })
     }
 }

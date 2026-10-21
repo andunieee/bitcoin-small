@@ -29,12 +29,27 @@ export component TradeActions inherits HorizontalLayout {
         }
     }
 
+    // canceling needs a second click, which expires after a few seconds
+    property <bool> confirming-cancel;
     if root.can-cancel: Button {
-        text: "Cancel trade";
+        text: root.confirming-cancel ? "Confirm cancel" : "Cancel";
         small: true;
         y: (parent.height - self.height) / 2;
         clicked => {
-            root.cancel();
+            if root.confirming-cancel {
+                root.confirming-cancel = false;
+                root.cancel();
+            } else {
+                root.confirming-cancel = true;
+            }
+        }
+    }
+
+    Timer {
+        interval: 4s;
+        running: root.confirming-cancel;
+        triggered => {
+            root.confirming-cancel = false;
         }
     }
 }

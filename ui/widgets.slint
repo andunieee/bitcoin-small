@@ -1,10 +1,12 @@
 import { Palette, LineEdit } from "std-widgets.slint";
 
 export component Card inherits Rectangle {
-    background: Palette.alternate-background;
+    // marks something as ours
+    in property <bool> mine;
+    background: root.mine ? #f7931a22 : Palette.alternate-background;
     border-radius: 8px;
-    border-width: 1px;
-    border-color: Palette.border;
+    border-width: root.mine ? 2px : 1px;
+    border-color: root.mine ? #f7931a : Palette.border;
 }
 
 // a touch area that also reports a right click or a long press, to inspect what it shows.

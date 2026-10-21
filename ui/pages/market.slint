@@ -77,6 +77,7 @@ export component MarketPage inherits VerticalLayout {
             padding-bottom: 8px;
             padding-right: 6px;
             Card {
+                mine: offer.mine;
                 RawTrigger {
                     mouse-cursor: pointer;
                     clicked => {
@@ -132,8 +133,11 @@ export component MarketPage inherits VerticalLayout {
                     }
                     HorizontalLayout {
                         spacing: 4px;
-                        if offer.mine: Muted {
-                            text: "you";
+                        if offer.mine: Text {
+                            text: "YOUR OFFER";
+                            color: #f7931a;
+                            font-size: 12px;
+                            font-weight: 700;
                             vertical-alignment: center;
                         }
                         if !offer.mine: Identity {

@@ -177,6 +177,10 @@ export component AppWindow inherits Window {
         return true;
     }
 
+    // how much of the window's bottom the on-screen keyboard covers: slint doesn't resize the
+    // window for it, so everything is bumped up by that much, the header going off the top
+    property <length> keyboard-height: self.virtual-keyboard-size.height;
+
     init => {
         keys.focus();
     }
@@ -190,6 +194,7 @@ export component AppWindow inherits Window {
         }
 
             VerticalLayout {
+            y: -root.keyboard-height;
             // header, extended under the status bar on phones that draw behind it
             Rectangle {
                 height: 52px + root.safe-area-insets.top;

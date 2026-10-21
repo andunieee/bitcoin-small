@@ -11,8 +11,8 @@ use ritualistic::{Event, Filter, PubKey, RedbEventDatabase, SecretKey, TagQuery}
 use crate::deal::{self, OfferTerms};
 use crate::protocol::{
     Conversation, KIND_MARK, KIND_PING, KIND_RUMOR, KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS,
-    MARK_ARCHIVED, MARK_CONCLUDED, MARK_OFFER, MARK_PRICE_CHECK, TRADE_REF, mark_of, ping_trade_id,
-    trade_mark,
+    MARK_ARCHIVED, MARK_CANCELED, MARK_CONCLUDED, MARK_OFFER, MARK_PRICE_CHECK, TRADE_REF, mark_of,
+    ping_trade_id, trade_mark,
 };
 use crate::store::{Message, State, Store, Trade};
 
@@ -28,6 +28,8 @@ pub enum Outcome {
     Failure,
     /// put away without a review
     Archived,
+    /// called off by either side, and put away
+    Canceled,
 }
 
 impl Outcome {
@@ -37,6 +39,7 @@ impl Outcome {
             Outcome::Success => "success",
             Outcome::Failure => "failure",
             Outcome::Archived => "archived",
+            Outcome::Canceled => "canceled",
         }
     }
 }
@@ -127,10 +130,10 @@ impl History {
         comment: &str,
         ended_at: u32,
     ) -> Result<String, String> {
-        let mark = if outcome == Outcome::Archived {
-            MARK_ARCHIVED
-        } else {
-            MARK_CONCLUDED
+        let mark = match outcome {
+            Outcome::Archived => MARK_ARCHIVED,
+            Outcome::Canceled => MARK_CANCELED,
+            _ => MARK_CONCLUDED,
         };
         self.save_mark(&trade.peer, &trade.trade_id, mark);
         self.insert(PastTrade {
@@ -266,6 +269,7 @@ impl History {
 enum Standing {
     Concluded,
     Archived,
+    Canceled,
     Reviewed(bool),
 }
 
@@ -344,6 +348,7 @@ impl Store {
                         Some(MARK_PRICE_CHECK) => trade.price_check = evt.content.parse().ok(),
                         Some(MARK_CONCLUDED) => standing.push((at, Standing::Concluded)),
                         Some(MARK_ARCHIVED) => standing.push((at, Standing::Archived)),
+                        Some(MARK_CANCELED) => standing.push((at, Standing::Canceled)),
                         _ => {}
                     }
                 } else if (evt.kind == KIND_TRADE_SUCCESS || evt.kind == KIND_TRADE_FAILURE)
@@ -389,13 +394,19 @@ impl Store {
             };
             let ended_at = standing
                 .iter()
-                .filter(|(_, s)| matches!(s, Standing::Concluded | Standing::Archived))
+                .filter(|(_, s)| {
+                    matches!(
+                        s,
+                        Standing::Concluded | Standing::Archived | Standing::Canceled
+                    )
+                })
                 .map(|(at, _)| *at)
                 .min()
                 .unwrap_or(standing[0].0);
             let (outcome, comment) = match last {
                 Standing::Concluded => (Outcome::Concluded, String::new()),
                 Standing::Archived => (Outcome::Archived, String::new()),
+                Standing::Canceled => (Outcome::Canceled, String::new()),
                 Standing::Reviewed(success) => (
                     if success {
                         Outcome::Success

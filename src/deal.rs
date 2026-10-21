@@ -113,6 +113,8 @@ pub enum Action {
     PaymentDetails(String),
     /// the sender has sent their side
     Sent,
+    /// the sender calls the trade off, whatever the step
+    Cancel,
 }
 
 impl Action {
@@ -125,6 +127,7 @@ impl Action {
             Action::BitcoinDetails(d) => ("bitcoin-details", Some(d.clone())),
             Action::PaymentDetails(d) => ("payment-details", Some(d.clone())),
             Action::Sent => ("sent", None),
+            Action::Cancel => ("cancel", None),
         };
         let mut tag = vec![TAG.to_string(), name.to_string()];
         tag.extend(value);
@@ -144,6 +147,7 @@ impl Action {
             "bitcoin-details" => Action::BitcoinDetails(value()?),
             "payment-details" => Action::PaymentDetails(value()?),
             "sent" => Action::Sent,
+            "cancel" => Action::Cancel,
             _ => return None,
         })
     }
@@ -167,6 +171,7 @@ impl Action {
             Action::BitcoinDetails(d) => format!("Send the bitcoin to:\n{d}"),
             Action::PaymentDetails(d) => format!("Send the {} to:\n{d}", terms.currency),
             Action::Sent => format!("I've sent {}.", terms.what_sends(who, deal)),
+            Action::Cancel => "I'm canceling the trade.".into(),
         }
     }
 }
@@ -192,6 +197,7 @@ impl Action {
             Action::BitcoinDetails(d) => format!("bitcoin goes to:\n{}", d.trim()),
             Action::PaymentDetails(d) => format!("{cur} goes to:\n{}", d.trim()),
             Action::Sent => format!("sent {}", terms.what_sends(who, deal)),
+            Action::Cancel => "canceled the trade".into(),
         }
     }
 }
@@ -233,8 +239,9 @@ impl Step {
         }
     }
 
-    fn of(action: &Action, who: Role) -> Step {
-        match action {
+    /// the step an action takes, none for the ones that aren't part of the sequence
+    fn of(action: &Action, who: Role) -> Option<Step> {
+        Some(match action {
             Action::Amount(_) => Step::Amount,
             Action::Price(_) => Step::Price,
             Action::BitcoinMethod(_) => Step::BitcoinMethod,
@@ -243,7 +250,8 @@ impl Step {
             Action::PaymentDetails(_) => Step::PaymentDetails,
             Action::Sent if who == Role::Taker => Step::TakerSends,
             Action::Sent => Step::MakerSends,
-        }
+            Action::Cancel => return None,
+        })
     }
 }
 
@@ -261,6 +269,8 @@ pub struct Deal {
     pub payment_details: Option<String>,
     pub taker_sent: bool,
     pub maker_sent: bool,
+    /// either side called it off, nothing else counts after that
+    pub canceled: bool,
 }
 
 impl Deal {
@@ -353,7 +363,17 @@ impl Deal {
 
     /// why `who` can't do `action` now, if they can't
     pub fn check(&self, terms: &OfferTerms, who: Role, action: &Action) -> Result<(), String> {
-        let step = Step::of(action, who);
+        if self.canceled {
+            return Err("the trade was canceled".into());
+        }
+        let Some(step) = Step::of(action, who) else {
+            // canceling is for a trade that is still going
+            return if self.concluded() {
+                Err("the trade is already concluded".into())
+            } else {
+                Ok(())
+            };
+        };
         if step.who(terms) != who {
             return Err("that is up to the other side".into());
         }
@@ -412,6 +432,7 @@ impl Deal {
             Action::PaymentDetails(d) => self.payment_details = Some(d.trim().to_string()),
             Action::Sent if who == Role::Taker => self.taker_sent = true,
             Action::Sent => self.maker_sent = true,
+            Action::Cancel => self.canceled = true,
         }
         true
     }

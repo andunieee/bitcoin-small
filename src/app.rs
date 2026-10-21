@@ -421,6 +421,8 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     let a = app.clone();
     ui.on_archive_trade(move || a.archive_trade());
+    let a = app.clone();
+    ui.on_cancel_trade(move || a.cancel_trade());
 
     let a = app.clone();
     ui.on_conclude_now(move || a.end_trade(Outcome::Concluded, ""));
@@ -2404,7 +2406,21 @@ impl App {
             }
             (shown, summary)
         };
+        let canceled = {
+            let store = self.store.lock().unwrap();
+            store
+                .state
+                .trades
+                .get(&conv.pubkey().to_hex())
+                .and_then(|t| Some(Deal::replay(t.offer.as_ref()?, &t.messages).canceled))
+                .unwrap_or(false)
+        };
         let name = self.name(&conv.peer);
+        if canceled {
+            self.notify(&conv.pubkey(), name, "canceled the trade".into(), false);
+            self.end_trade_of(conv.pubkey(), Outcome::Canceled, "");
+            return;
+        }
         if new_pair.is_some() {
             self.notify(
                 &conv.pubkey(),
@@ -3076,6 +3092,16 @@ impl App {
         }
     }
 
+    /// call off the trade being looked at: tell the other side, and archive it
+    fn cancel_trade(self: &Arc<Self>) {
+        let Some(TradeRef::Ongoing(peer)) = self.current_trade.lock().unwrap().clone() else {
+            return;
+        };
+        if self.send_action_to(peer, Action::Cancel, false) {
+            self.end_trade(Outcome::Canceled, "");
+        }
+    }
+
     /// end the ongoing trade: concluded to be reviewed later, with a public review (success or
     /// failure), or just archived. it moves from the json state to the history database and we
     /// stop listening.
@@ -3083,6 +3109,11 @@ impl App {
         let Some(TradeRef::Ongoing(key)) = self.current_trade.lock().unwrap().clone() else {
             return;
         };
+        self.end_trade_of(key, outcome, comment);
+    }
+
+    /// end the ongoing trade with conversation key `key`, which may not be the one on screen
+    fn end_trade_of(self: &Arc<Self>, key: PubKey, outcome: Outcome, comment: &str) {
         let (trade_peer, past_id) = {
             let mut store = self.store.lock().unwrap();
             let Some(trade) = store.state.trades.get(&key.to_hex()).cloned() else {
@@ -3105,7 +3136,15 @@ impl App {
         {
             self.publish_review(peer, outcome == Outcome::Success, comment, Some(past_id));
         }
-        self.leave_trade();
+        let on_screen = matches!(
+            &*self.current_trade.lock().unwrap(),
+            Some(TradeRef::Ongoing(k)) if *k == key
+        );
+        if on_screen {
+            self.leave_trade();
+        } else {
+            self.render_trades();
+        }
     }
 
     /// forget a trade that is over, concluded or archived, without keeping it anywhere
@@ -3179,9 +3218,10 @@ impl App {
                 .filter_map(past_item)
                 .collect();
             // archived ones weren't concluded
-            let concluded = store
-                .history
-                .any(|t| t.outcome != Outcome::Archived && real_trade(t.offer.as_ref()));
+            let concluded = store.history.any(|t| {
+                !matches!(t.outcome, Outcome::Archived | Outcome::Canceled)
+                    && real_trade(t.offer.as_ref())
+            });
             (ongoing, pending, past, concluded)
         };
         // the page of the offer being looked at lists trades too
@@ -3939,6 +3979,7 @@ fn past_status(t: &PastTrade) -> String {
         Outcome::Success => "✓ concluded: success",
         Outcome::Failure => "✗ concluded: failure",
         Outcome::Archived => "archived",
+        Outcome::Canceled => "canceled",
     };
     if t.comment.is_empty() {
         outcome.into()
@@ -4113,6 +4154,7 @@ fn past_item(labels: &BTreeMap<String, String>, t: &PastTrade) -> Option<TradeIt
             date(Timestamp(t.started_at)),
             match t.outcome {
                 Outcome::Archived => "archived",
+                Outcome::Canceled => "canceled",
                 _ => "concluded",
             },
             date(Timestamp(t.ended_at))

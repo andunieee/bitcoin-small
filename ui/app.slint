@@ -109,6 +109,7 @@ export component AppWindow inherits Window {
     callback conclude-trade(bool, string);
     callback conclude-now();
     callback archive-trade();
+    callback cancel-trade();
     callback delete-trade();
     callback delete-review(string);
 
@@ -405,6 +406,9 @@ export component AppWindow inherits Window {
                         }
                         archive-trade => {
                             root.archive-trade();
+                        }
+                        cancel-trade => {
+                            root.cancel-trade();
                         }
                         conclude-now => {
                             root.conclude-now();

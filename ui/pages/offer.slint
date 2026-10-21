@@ -202,7 +202,7 @@ export component OfferPage inherits ScrollView {
                             }
 
                             Text {
-                                text: item.comment != "" ? item.comment : (item.outcome == "success" ? "successful trade" : item.outcome == "failure" ? "failed trade" : "archived, no review");
+                                text: item.comment != "" ? item.comment : (item.outcome == "success" ? "successful trade" : item.outcome == "failure" ? "failed trade" : item.outcome == "canceled" ? "canceled trade" : "archived, no review");
                                 wrap: word-wrap;
                             }
                         }

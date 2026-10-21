@@ -22,6 +22,7 @@ export component TradePage inherits VerticalLayout {
     in property <bool> trade-wide;
     callback open-profile(string);
     callback archive-trade();
+    callback cancel-trade();
     callback conclude-trade(bool, string);
     callback conclude-now();
     callback send-message(string);
@@ -100,6 +101,9 @@ export component TradePage inherits VerticalLayout {
                     }
                     archive => {
                         root.archive-trade();
+                    }
+                    cancel => {
+                        root.cancel-trade();
                     }
                 }
             }

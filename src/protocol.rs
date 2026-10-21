@@ -31,6 +31,7 @@ pub const MARK_OFFER: &str = "offer";
 pub const MARK_PRICE_CHECK: &str = "price-check";
 pub const MARK_CONCLUDED: &str = "concluded";
 pub const MARK_ARCHIVED: &str = "archived";
+pub const MARK_CANCELED: &str = "canceled";
 /// nip-65 relay list
 pub const KIND_RELAY_LIST: Kind = Kind(10002);
 

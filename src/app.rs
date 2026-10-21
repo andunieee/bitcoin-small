@@ -116,7 +116,8 @@ struct App {
     /// (side, currency)
     filters: Mutex<(String, String)>,
 
-    ping_sub: Mutex<Option<LiveSub>>,
+    /// the relays we listen on for pings and the subscription itself
+    ping_sub: Mutex<Option<(Vec<String>, LiveSub)>>,
     /// whether we had yet to trade for real when the app started: no trade recorded, ongoing or
     /// past, other than in the practice market. then the market and the new offer form start
     /// with XFK.
@@ -206,6 +207,7 @@ fn start(store: Store) -> Result<AppWindow, slint::PlatformError> {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             a.sync_background();
+            a.refresh_ping_sub();
         }
     });
 
@@ -1987,12 +1989,6 @@ impl App {
                 recent.insert(0, template);
                 recent.truncate(form::RECENT_OFFERS);
             }
-            let ping_relays = &mut store.state.ping_relays;
-            for r in relays.into_iter().rev() {
-                ping_relays.retain(|x| x != &r);
-                ping_relays.insert(0, r);
-            }
-            ping_relays.truncate(12);
             store.persist();
         }
         self.restart_ping_sub();
@@ -2063,6 +2059,7 @@ impl App {
         }) else {
             return;
         };
+        self.restart_ping_sub();
         self.offers
             .lock()
             .unwrap()
@@ -2090,27 +2087,37 @@ impl App {
         });
     }
 
-    /// pings are signed by the sender's real key and p-tag us. we listen for them on our app relays
-    /// and on the negotiation relays of the offers we made.
+    /// pings are signed by the sender's real key and p-tag us. we listen for them on the
+    /// negotiation relays declared by our open offers, and nowhere else when we have none.
     fn restart_ping_sub(self: &Arc<Self>) {
-        let relays = {
-            let s = &self.store.lock().unwrap().state;
-            let mut relays = s.app_relays.clone();
-            for r in &s.ping_relays {
-                if !relays.contains(r) {
-                    relays.push(r.clone());
-                }
-            }
-            relays
+        let relays = declared_relays(&self.store.lock().unwrap().state);
+        let sub = if relays.is_empty() {
+            LiveSub(vec![])
+        } else {
+            let filter = Filter {
+                kinds: Some(vec![KIND_PING]),
+                tags: Some(vec![TagQuery("p".into(), vec![self.me().to_hex()])]),
+                since: Some(now()),
+                ..Default::default()
+            };
+            self.live(&relays, filter, |app, evt, url| app.on_ping(evt, url))
         };
-        let filter = Filter {
-            kinds: Some(vec![KIND_PING]),
-            tags: Some(vec![TagQuery("p".into(), vec![self.me().to_hex()])]),
-            since: Some(now()),
-            ..Default::default()
-        };
-        let sub = self.live(&relays, filter, |app, evt, url| app.on_ping(evt, url));
-        *self.ping_sub.lock().unwrap() = Some(sub);
+        *self.ping_sub.lock().unwrap() = Some((relays, sub));
+    }
+
+    /// restart the ping subscription if the relays our open offers declare are not the ones we
+    /// listen on, which happens when an offer expires
+    fn refresh_ping_sub(self: &Arc<Self>) {
+        let relays = declared_relays(&self.store.lock().unwrap().state);
+        let current = self
+            .ping_sub
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(r, _)| r.clone());
+        if current.as_ref() != Some(&relays) {
+            self.restart_ping_sub();
+        }
     }
 
     /// someone wants to trade with us: that starts a trade, unless there is one going on already.
@@ -2130,17 +2137,12 @@ impl App {
                 let relays = if url == xfk::RELAY {
                     vec![xfk::RELAY.into()]
                 } else {
-                    let ping_relays: Vec<String> = store
-                        .state
-                        .ping_relays
-                        .iter()
-                        .filter(|r| *r != xfk::RELAY)
-                        .cloned()
-                        .collect();
-                    if ping_relays.is_empty() {
-                        store.state.app_relays.clone()
+                    let mut declared = declared_relays(&store.state);
+                    declared.retain(|r| r != xfk::RELAY);
+                    if declared.is_empty() {
+                        vec![url.to_string()]
                     } else {
-                        ping_relays
+                        declared
                     }
                 };
                 store.state.trades.insert(
@@ -3483,7 +3485,7 @@ fn offer_mark_event(
 }
 
 /// where a trade that has no offer behind it talks: the practice market with the bots, our relays
-/// in a chat we started, and where we listen for pings when someone pinged us
+/// in a chat we started, and where our open offers listen for pings when someone pinged us
 fn trade_relays(state: &State, t: &Trade, xfk_people: &[PubKey]) -> Vec<String> {
     if t.peer
         .parse::<PubKey>()
@@ -3491,17 +3493,23 @@ fn trade_relays(state: &State, t: &Trade, xfk_people: &[PubKey]) -> Vec<String> 
     {
         return vec![xfk::RELAY.into()];
     }
-    let ping_relays: Vec<String> = state
-        .ping_relays
-        .iter()
-        .filter(|r| *r != xfk::RELAY)
-        .cloned()
-        .collect();
-    if t.started_by_me || ping_relays.is_empty() {
+    let declared = declared_relays(state);
+    if t.started_by_me || declared.is_empty() {
         state.app_relays.clone()
     } else {
-        ping_relays
+        declared
     }
+}
+
+/// the negotiation relays declared by our open offers, as normalized urls without repeats
+fn declared_relays(state: &State) -> Vec<String> {
+    let relays: Vec<String> = state
+        .my_offers
+        .iter()
+        .filter_map(|o| Offer::from_event(&o.event))
+        .flat_map(|o| o.relays)
+        .collect();
+    merge_relays(&relays, &[])
 }
 
 fn start_slack(t: &Trade) -> u32 {

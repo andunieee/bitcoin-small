@@ -700,4 +700,31 @@ mod tests {
         assert_eq!(o.bitcoin_methods, vec!["lightning", "liquid"]);
         assert_eq!(o.relays, vec!["wss://nostr.wine/".to_string()]);
     }
+
+    #[test]
+    fn offer_keeps_every_negotiation_relay() {
+        let sk = SecretKey::generate();
+        let evt = NewOffer {
+            side: Side::Buy,
+            currency: "usd".into(),
+            price_api: "coingecko".into(),
+            premium: 0.0,
+            amount_min: 20.0,
+            amount_max: 20.0,
+            payment_methods: vec!["Zelle".into()],
+            bitcoin_methods: vec!["lightning".into()],
+            relays: vec![
+                "wss://nos.lol".into(),
+                "wss://nostr.land".into(),
+                "wss://nostr.wine".into(),
+            ],
+            description: String::new(),
+        }
+        .to_event(&sk);
+        let o = Offer::from_event(&evt).unwrap();
+        assert_eq!(
+            o.relays,
+            vec!["wss://nos.lol/", "wss://nostr.land/", "wss://nostr.wine/"]
+        );
+    }
 }

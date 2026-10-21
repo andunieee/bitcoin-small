@@ -199,9 +199,6 @@ pub struct State {
     /// list or published one.
     #[serde(default)]
     pub write_relays: Option<Vec<String>>,
-    /// relays of offers we made recently, where we listen for pings
-    #[serde(default)]
-    pub ping_relays: Vec<String>,
     /// conversation pubkey hex -> ongoing trade. they are not saved: they are put back together
     /// from the event database when the app starts, see `Store::load_trades`.
     #[serde(skip)]

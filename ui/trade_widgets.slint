@@ -8,6 +8,7 @@ export component TradeActions inherits HorizontalLayout {
     callback conclude();
     callback archive();
     callback cancel();
+    in property <bool> can-cancel: true;
     spacing: 6px;
     alignment: end;
     Button {
@@ -28,7 +29,7 @@ export component TradeActions inherits HorizontalLayout {
         }
     }
 
-    Button {
+    if root.can-cancel: Button {
         text: "Cancel trade";
         small: true;
         y: (parent.height - self.height) / 2;

@@ -96,6 +96,7 @@ export component TradePage inherits VerticalLayout {
                     }
                 }
                 if root.trade.ongoing && !root.trade-concluding: TradeActions {
+                    can-cancel: !root.deal.any-sent;
                     conclude => {
                         root.conclude-now();
                     }

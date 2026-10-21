@@ -105,6 +105,8 @@ export struct DealView {
     send-label: string,
     // once both sides have sent their part: why to take our time before reviewing
     review-hint: string,
+    // either side has said they sent their part: too late to cancel
+    any-sent: bool,
 }
 
 export struct MsgItem {

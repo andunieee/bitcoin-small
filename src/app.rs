@@ -3899,6 +3899,7 @@ fn deal_view(
             v.iter().map(SharedString::from).collect::<Vec<_>>(),
         ))
     };
+    view.any_sent = deal.taker_sent || deal.maker_sent;
     if deal.concluded() {
         view.review_hint =
             "Both sides say they have sent their part. There is no hurry to review: \

@@ -1,4 +1,4 @@
-import { LineEdit, TextEdit } from "std-widgets.slint";
+import { InputLine, InputArea } from "widgets.slint";
 import { DealView } from "models.slint";
 import { Card, Muted, Selectable, Tip, Button, Choices } from "widgets.slint";
 
@@ -108,7 +108,7 @@ export component DealPanel inherits VerticalLayout {
 
             HorizontalLayout {
                 spacing: 8px;
-                amount := LineEdit {
+                amount := InputLine {
                     placeholder-text: root.deal.amount-hint;
                     input-type: InputType.decimal;
                     accepted => {
@@ -148,7 +148,7 @@ export component DealPanel inherits VerticalLayout {
 
             HorizontalLayout {
                 spacing: 8px;
-                quote := LineEdit {
+                quote := InputLine {
                     placeholder-text: "price of 1 BTC";
                     input-type: InputType.decimal;
                     accepted => {
@@ -197,7 +197,7 @@ export component DealPanel inherits VerticalLayout {
                 text: root.deal.details-hint;
             }
 
-            TextEdit {
+            InputArea {
                 text <=> root.draft;
                 min-height: 80px;
                 wrap: word-wrap;

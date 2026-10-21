@@ -1,4 +1,5 @@
-import { LineEdit, ScrollView } from "std-widgets.slint";
+import { InputLine } from "../widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { OfferItem, ReviewItem, TradeItem } from "../models.slint";
 import { TradeCard } from "../trade_widgets.slint";
 import { Card, Title, Muted, Identity, Button, RawTrigger, Selectable, SideBadge } from "../widgets.slint";
@@ -54,7 +55,7 @@ export component ProfilePage inherits ScrollView {
 
         if !root.profile-is-me: HorizontalLayout {
             spacing: 8px;
-            LineEdit {
+            InputLine {
                 text <=> root.label-draft;
                 placeholder-text: "label, only you see it";
                 accepted => {
@@ -273,7 +274,7 @@ export component ProfilePage inherits ScrollView {
                 font-weight: 700;
             }
 
-            comment := LineEdit {
+            comment := InputLine {
                 placeholder-text: "optional comment, e.g. \"$5 via PIX, fast\"";
             }
 

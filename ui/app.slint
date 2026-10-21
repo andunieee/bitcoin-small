@@ -1,6 +1,6 @@
 import { ScrollView, Palette } from "std-widgets.slint";
 import { OfferItem, HistoryItem, TradeItem, TradeView, DealView, MsgItem, PastReviewItem, ReviewItem, PersonItem, RelayItem, RelayAnswer, SentItem, PayItem } from "models.slint";
-import { Card, Title, Button, NavButton } from "widgets.slint";
+import { Card, Title, Button, NavButton, Keyboard } from "widgets.slint";
 import { SentReport } from "trade_widgets.slint";
 import { MarketPage } from "pages/market.slint";
 import { OfferPage } from "pages/offer.slint";
@@ -180,9 +180,15 @@ export component AppWindow inherits Window {
         return true;
     }
 
-    // how much of the window's bottom the on-screen keyboard covers: slint doesn't resize the
-    // window for it, so everything is bumped up by that much, the header going off the top
+    // slint doesn't resize the window for the on-screen keyboard, so the layout is bumped up by
+    // just what it takes for the focused input to end above the keyboard: nothing if it already
+    // does, and never more than the keyboard's height
     property <length> keyboard-height: self.virtual-keyboard-size.height;
+    property <length> bump: root.keyboard-height <= 0 ? 0px : Math.min(root.keyboard-height,
+        Math.max(0px, Keyboard.input-bottom + 8px - (root.height - root.keyboard-height)));
+    changed bump => {
+        Keyboard.bump = root.bump;
+    }
 
     init => {
         keys.focus();
@@ -197,7 +203,7 @@ export component AppWindow inherits Window {
         }
 
             VerticalLayout {
-            y: -root.keyboard-height;
+            y: -root.bump;
             // header, extended under the status bar on phones that draw behind it
             Rectangle {
                 height: 52px + root.safe-area-insets.top;

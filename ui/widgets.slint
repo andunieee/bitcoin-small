@@ -1,4 +1,29 @@
-import { Palette, LineEdit } from "std-widgets.slint";
+import { Palette, LineEdit, TextEdit } from "std-widgets.slint";
+
+// where the focused text input ends, so that the window can be bumped up just enough to keep
+// it above the on-screen keyboard
+export global Keyboard {
+    // the bottom of the focused input in the unbumped layout
+    in-out property <length> input-bottom;
+    // how much the layout is currently bumped up
+    in-out property <length> bump;
+}
+
+export component InputLine inherits LineEdit {
+    changed has-focus => {
+        if self.has-focus {
+            Keyboard.input-bottom = self.absolute-position.y + self.height + Keyboard.bump;
+        }
+    }
+}
+
+export component InputArea inherits TextEdit {
+    changed has-focus => {
+        if self.has-focus {
+            Keyboard.input-bottom = self.absolute-position.y + self.height + Keyboard.bump;
+        }
+    }
+}
 
 export component Card inherits Rectangle {
     // marks something as ours
@@ -210,7 +235,7 @@ export component NumberEdit inherits Rectangle {
         root.edited();
     }
 
-    LineEdit {
+    InputLine {
         x: 0;
         width: parent.width - 22px;
         height: parent.height;

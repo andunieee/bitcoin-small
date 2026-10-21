@@ -1,4 +1,5 @@
-import { LineEdit, CheckBox } from "std-widgets.slint";
+import { InputLine } from "widgets.slint";
+import { CheckBox } from "std-widgets.slint";
 import { RelayItem } from "models.slint";
 import { Button } from "widgets.slint";
 
@@ -33,7 +34,7 @@ export component RelayPicker inherits VerticalLayout {
 
     HorizontalLayout {
         spacing: 8px;
-        new-relay := LineEdit {
+        new-relay := InputLine {
             placeholder-text: "add a relay, e.g. 'relay.example.com'";
             accepted => {
                 root.added(root.id, self.text);

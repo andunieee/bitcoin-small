@@ -1,6 +1,5 @@
+import { InputLine, InputArea } from "../widgets.slint";
 import {
-    LineEdit,
-    TextEdit,
     ScrollView,
     ListView,
     Palette,
@@ -117,7 +116,7 @@ export component TradePage inherits VerticalLayout {
                     font-weight: 700;
                 }
 
-                conclusion := LineEdit {
+                conclusion := InputLine {
                     placeholder-text: "optional comment, e.g. \"$5 via PIX, fast\"";
                 }
 
@@ -343,7 +342,7 @@ export component TradePage inherits VerticalLayout {
                         }
                         return reject;
                     }
-                    input := TextEdit {
+                    input := InputArea {
                         width: parent.width;
                         height: parent.height;
                         placeholder-text: "message";

@@ -1,4 +1,5 @@
-import { TextEdit, Palette } from "std-widgets.slint";
+import { InputArea } from "widgets.slint";
+import { Palette } from "std-widgets.slint";
 import { TradeItem, SentItem, RelayAnswer } from "models.slint";
 import { Card, Muted, Identity, Button } from "widgets.slint";
 
@@ -126,7 +127,7 @@ export component SentReport inherits VerticalLayout {
         }
     }
 
-    if root.show-json: TextEdit {
+    if root.show-json: InputArea {
         text: root.item.json;
         read-only: true;
         wrap: char-wrap;

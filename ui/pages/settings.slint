@@ -1,4 +1,5 @@
-import { LineEdit, ScrollView, Switch } from "std-widgets.slint";
+import { InputLine } from "../widgets.slint";
+import { ScrollView, Switch } from "std-widgets.slint";
 import { RelayItem } from "../models.slint";
 import { Title, Muted, Button } from "../widgets.slint";
 import { RelayPicker } from "../relay_picker.slint";
@@ -25,7 +26,7 @@ export component SettingsPage inherits ScrollView {
             text: "Your key";
         }
 
-        LineEdit {
+        InputLine {
             text: root.npub;
             read-only: true;
         }
@@ -47,7 +48,7 @@ export component SettingsPage inherits ScrollView {
             }
         }
 
-        if root.nsec != "": LineEdit {
+        if root.nsec != "": InputLine {
             text: root.nsec;
             read-only: true;
         }
@@ -88,7 +89,7 @@ export component SettingsPage inherits ScrollView {
 
             HorizontalLayout {
                 spacing: 8px;
-                import-field := LineEdit {
+                import-field := InputLine {
                     placeholder-text: "nsec1…";
                     input-type: password;
                 }

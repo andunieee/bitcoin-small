@@ -3810,13 +3810,12 @@ fn deal_view(
     let sats = |n: u64| format!("{} sats", thousands(n as f64));
     let to_whom = |receiver: Role| if receiver == me { "you" } else { "them" };
 
-    // the maker's price is the one that counts. the taker sees how it compares to the source.
+    // the maker's price is the one that counts. the taker sees how it compares to the source, in
+    // the tip shown when pointing at the price.
     let mut price_warning = String::new();
-    let price = match (deal.price, me) {
-        (None, _) => None,
-        (Some(p), Role::Maker) => Some(format!("{} {cur}/BTC, as you said", thousands(p))),
-        (Some(p), Role::Taker) => Some({
-            let quoted = format!("{} {cur}/BTC, as they said", thousands(p));
+    let mut price_tip = String::new();
+    let price = deal.price.map(|p| {
+        if me == Role::Taker {
             match (check, &live) {
                 (Some(expected), _) => {
                     let off = deal::deviation_pct(p, expected);
@@ -3827,41 +3826,45 @@ fn deal_view(
                             thousands(expected)
                         );
                     }
-                    format!("{quoted} · {off:.1}% off {source}")
+                    price_tip = format!("{off:.1}% off {source}");
                 }
-                (None, Some(Err(why))) => format!("{quoted} · couldn't check it: {why}"),
-                _ => quoted,
+                (None, Some(Err(why))) => price_tip = format!("couldn't check it: {why}"),
+                _ => {}
             }
-        }),
-    };
+        }
+        format!("{} {cur}/BTC", thousands(p))
+    });
 
-    // only what is set, the pairs side by side
-    let pairs: Vec<[Option<(String, String)>; 2]> = vec![
+    // only what is set, up to three side by side. a cell is label, value and tip
+    let cell = |label: String, value: String| (label, value, String::new());
+    let rows_in: Vec<[Option<(String, String, String)>; 3]> = vec![
         [
-            deal.amount.map(|a| (cur.clone(), fiat(a))),
-            deal.sats().map(|n| ("bitcoin".into(), sats(n))),
+            deal.amount.map(|a| cell(cur.clone(), fiat(a))),
+            deal.sats().map(|n| cell("bitcoin".into(), sats(n))),
+            price.map(|p| ("price".into(), p, price_tip)),
         ],
-        [price.map(|p| ("price".into(), p)), None],
         [
             deal.bitcoin_method
                 .clone()
-                .map(|m| (format!("bitcoin sent via"), m)),
+                .map(|m| cell(format!("bitcoin sent via"), m)),
             deal.payment_method
                 .clone()
-                .map(|m| (format!("{cur} sent via"), m)),
+                .map(|m| cell(format!("{cur} sent via"), m)),
+            None,
         ],
         [
             deal.bitcoin_details.clone().map(|d| {
-                (
+                cell(
                     format!("bitcoin goes to {}", to_whom(terms.bitcoin_receiver())),
                     d,
                 )
             }),
             None,
+            None,
         ],
         [
             deal.payment_details.clone().map(|d| {
-                (
+                cell(
                     format!(
                         "{cur} goes to {}",
                         to_whom(terms.bitcoin_receiver().other())
@@ -3870,25 +3873,33 @@ fn deal_view(
                 )
             }),
             None,
+            None,
         ],
         [
             deal.taker_sent
-                .then(|| (format!("{} sent first", who(Role::Taker)), "✓ sent".into())),
+                .then(|| cell(format!("{} sent first", who(Role::Taker)), "✓ sent".into())),
             deal.maker_sent
-                .then(|| (format!("then {} sent", who(Role::Maker)), "✓ sent".into())),
+                .then(|| cell(format!("then {} sent", who(Role::Maker)), "✓ sent".into())),
+            None,
         ],
     ];
-    let rows: Vec<DealRow> = pairs
+    let rows: Vec<DealRow> = rows_in
         .into_iter()
-        .filter_map(|pair| {
-            let mut set = pair.into_iter().flatten();
-            let (label, value) = set.next()?;
-            let (label2, value2) = set.next().unwrap_or_default();
+        .filter_map(|row| {
+            let mut set = row.into_iter().flatten();
+            let (label, value, tip) = set.next()?;
+            let (label2, value2, tip2) = set.next().unwrap_or_default();
+            let (label3, value3, tip3) = set.next().unwrap_or_default();
             Some(DealRow {
                 label: label.into(),
                 value: value.into(),
+                tip: tip.into(),
                 label2: label2.into(),
                 value2: value2.into(),
+                tip2: tip2.into(),
+                label3: label3.into(),
+                value3: value3.into(),
+                tip3: tip3.into(),
             })
         })
         .collect();

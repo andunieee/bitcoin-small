@@ -71,12 +71,18 @@ export struct TradeView {
     summary-short: string,
 }
 
- // one row of what has been agreed, with a second column when label2 isn't empty
+ // one row of what has been agreed, with more columns when label2 and label3 aren't empty.
+// a tip is shown when pointing at its label
 export struct DealRow {
     label: string,
     value: string,
+    tip: string,
     label2: string,
     value2: string,
+    tip2: string,
+    label3: string,
+    value3: string,
+    tip3: string,
 }
 
 // the structured state of a trade that came from an offer, and which of its forms are ours to fill

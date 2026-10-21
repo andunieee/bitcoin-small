@@ -2,6 +2,30 @@ import { LineEdit, TextEdit } from "std-widgets.slint";
 import { DealView } from "models.slint";
 import { Card, Muted, Selectable, Tip, Button, Choices } from "widgets.slint";
 
+// a label over a value, with the tip under them while the pointer is on the label
+component DealCell inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <string> tip;
+    horizontal-stretch: 1;
+    Muted {
+        text: root.label;
+        pointer := TouchArea {
+            enabled: root.tip != "";
+        }
+    }
+
+    Selectable {
+        text: root.value;
+        font-size: 13px;
+        wrap: word-wrap;
+    }
+
+    if pointer.has-hover || pointer.pressed: Muted {
+        text: root.tip;
+    }
+}
+
 // where a trade stands and the forms that move it forward. picking something sends a message.
 export component DealPanel inherits VerticalLayout {
     in property <DealView> deal;
@@ -50,30 +74,21 @@ export component DealPanel inherits VerticalLayout {
             spacing: 4px;
             for row in root.deal.rows: HorizontalLayout {
                 spacing: 8px;
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    Muted {
-                        text: row.label;
-                    }
-
-                    Selectable {
-                        text: row.value;
-                        font-size: 13px;
-                        wrap: word-wrap;
-                    }
+                DealCell {
+                    label: row.label;
+                    value: row.value;
+                    tip: row.tip;
                 }
 
-                if row.label2 != "": VerticalLayout {
-                    horizontal-stretch: 1;
-                    Muted {
-                        text: row.label2;
-                    }
-
-                    Selectable {
-                        text: row.value2;
-                        font-size: 13px;
-                        wrap: word-wrap;
-                    }
+                if row.label2 != "": DealCell {
+                    label: row.label2;
+                    value: row.value2;
+                    tip: row.tip2;
+                }
+                if row.label3 != "": DealCell {
+                    label: row.label3;
+                    value: row.value3;
+                    tip: row.tip3;
                 }
             }
         }
@@ -203,7 +218,7 @@ export component DealPanel inherits VerticalLayout {
                 }
             }
             if root.confirming == "details": Tip {
-                text: "Check every character. If these details are wrong, what they send can go to someone else and be lost for good.";
+                text: "Check again before sending to avoid accidents.";
             }
             if root.confirming == "details": HorizontalLayout {
                 spacing: 8px;

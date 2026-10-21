@@ -221,21 +221,8 @@ export component AppWindow inherits Window {
                             vertical-alignment: center;
                         }
 
-                        Text {
-                            text: root.status;
-                            color: white;
-                            font-size: 11px;
-                            horizontal-alignment: right;
-                            vertical-alignment: center;
-                            overflow: elide;
+                        Rectangle {
                             horizontal-stretch: 1;
-                            // what it says is mostly about relays, which are set up there
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.page = 6;
-                                }
-                            }
                         }
                     }
 

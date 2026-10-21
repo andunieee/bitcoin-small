@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cargo-apk can't declare a service or ship java code, so this adds them to the apk it built:
-# compiles android/src into classes.dex, patches the manifest, and repackages and signs the apk.
+# compiles android/src into classes.dex, patches the manifest, adds the launcher icon, and repackages and signs the apk.
 #
 # usage: android/package.sh <apk> <keystore> <keystore password>
 set -euo pipefail
@@ -28,12 +28,17 @@ mkdir "$tmp/dex"
     $(find "$tmp/classes" -name '*.class')
 
 sed -e 's|android:hasCode="false"|android:hasCode="true"|' \
+    -e 's|<application |<application android:icon="@mipmap/ic_launcher" |' \
     -e 's|</application>|<service android:name="cash.small.bitcoin.ForegroundService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="listens for trade messages over nostr while offers or trades are open"/></service></application>|' \
     "$manifest" > "$tmp/AndroidManifest.xml"
 grep -q ForegroundService "$tmp/AndroidManifest.xml"
+grep -q ic_launcher "$tmp/AndroidManifest.xml"
 
-# a resource-less apk with the new manifest, then the native libraries and the dex on top
-"$build_tools/aapt2" link --manifest "$tmp/AndroidManifest.xml" -I "$android_jar" -o "$tmp/base.apk"
+# the launcher icon, rendered from docs/static/logo.svg into android/res
+"$build_tools/aapt2" compile --dir "$here/res" -o "$tmp/res.zip"
+
+# an apk with the new manifest and the icon, then the native libraries and the dex on top
+"$build_tools/aapt2" link --manifest "$tmp/AndroidManifest.xml" -I "$android_jar" "$tmp/res.zip" -o "$tmp/base.apk"
 mkdir "$tmp/files"
 unzip -q "$apk" 'lib/*' -d "$tmp/files"
 cp "$tmp/dex/classes.dex" "$tmp/files/"

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="bitcoin-smol">
+  <title>bitcoin-smol</title>
+  <defs>
+    <clipPath id="disk"><circle cx="124" cy="136" r="88"/></clipPath>
+    <g id="bite">
+      <circle cx="207" cy="103" r="25"/>
+      <circle cx="187" cy="64" r="25"/>
+      <circle cx="148" cy="47" r="23"/>
+    </g>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="#fff1d6"/>
+  <!-- cookie -->
+  <circle cx="124" cy="136" r="84" fill="#f4a73b" stroke="#5a3418" stroke-width="8"/>
+  <circle cx="124" cy="136" r="70" fill="none" stroke="#d9871f" stroke-width="5" stroke-dasharray="2 12" stroke-linecap="round"/>
+  <!-- bite -->
+  <g clip-path="url(#disk)">
+    <use href="#bite" fill="none" stroke="#5a3418" stroke-width="16"/>
+  </g>
+  <use href="#bite" fill="#fff1d6"/>
+  <!-- chips -->
+  <g fill="#6b3b1a" stroke="#4a2810" stroke-width="3" stroke-linejoin="round">
+    <path d="M60 110l14-5 6 12-12 8z"/>
+    <path d="M70 176l13-4 7 11-12 7z"/>
+    <path d="M148 196l14-3 4 12-14 5z"/>
+    <path d="M180 160l12 2 1 12-13 1z"/>
+  </g>
+  <!-- face -->
+  <g fill="#3a1f0d">
+    <ellipse cx="102" cy="132" rx="7" ry="9"/>
+    <ellipse cx="148" cy="132" rx="7" ry="9"/>
+  </g>
+  <circle cx="104" cy="129" r="2.6" fill="#fff"/>
+  <circle cx="150" cy="129" r="2.6" fill="#fff"/>
+  <ellipse cx="88" cy="150" rx="9" ry="6" fill="#ee6f57" opacity=".6"/>
+  <ellipse cx="162" cy="150" rx="9" ry="6" fill="#ee6f57" opacity=".6"/>
+  <path d="M112 148q13 14 26 0" fill="none" stroke="#3a1f0d" stroke-width="5" stroke-linecap="round"/>
+  <!-- crumbs -->
+  <g fill="#f4a73b" stroke="#5a3418" stroke-width="3">
+    <circle cx="224" cy="168" r="5"/>
+    <circle cx="216" cy="190" r="3.5"/>
+  </g>
+</svg>

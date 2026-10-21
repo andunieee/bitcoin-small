@@ -68,11 +68,7 @@ impl OfferTerms {
     }
 
     pub fn my_role(&self) -> Role {
-        if self.mine {
-            Role::Maker
-        } else {
-            Role::Taker
-        }
+        if self.mine { Role::Maker } else { Role::Taker }
     }
 
     /// whoever ends up with the bitcoin. the other one ends up with the fiat.

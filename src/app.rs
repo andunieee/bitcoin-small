@@ -17,8 +17,8 @@ use crate::prices::{self, PriceApi, fiat, thousands};
 use crate::protocol::*;
 use crate::relays::{MemoryRelay, Occurrence, Relays, Router};
 use crate::store::{
-    DEFAULT_WRITE_RELAYS, Delivery, ENOUGH_OWN_REVIEWS, Message, MyOffer, Store,
-    State, TRUSTED_PEERS_TO_ASK, Trade,
+    DEFAULT_WRITE_RELAYS, Delivery, ENOUGH_OWN_REVIEWS, Message, MyOffer, State, Store,
+    TRUSTED_PEERS_TO_ASK, Trade,
 };
 use crate::xfk;
 use crate::{
@@ -127,6 +127,8 @@ struct App {
     dm_subs: Mutex<HashMap<String, LiveSub>>,
 
     current_trade: Mutex<Option<TradeRef>>,
+    /// id of the offer whose page was opened last, to keep its trades up to date
+    current_offer: Mutex<Option<String>>,
     current_profile: Mutex<Option<PubKey>>,
     /// held while quoting prices, so a quote isn't sent twice
     quoting: Mutex<()>,
@@ -261,6 +263,7 @@ fn build(mut store: Store, offline: bool) -> Result<(AppWindow, Arc<App>), slint
         practice_sub: Mutex::new(None),
         dm_subs: Mutex::new(HashMap::new()),
         current_trade: Mutex::new(None),
+        current_offer: Mutex::new(None),
         current_profile: Mutex::new(None),
         quoting: Mutex::new(()),
         refresh_gen: AtomicU64::new(0),
@@ -307,20 +310,15 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     let a = app.clone();
     ui.on_open_offer(move |id| {
-        let (item, mine, maker) = {
-            let offers = a.offers.lock().unwrap();
-            let Some(offer) = offers.iter().find(|o| o.id.to_hex() == id.as_str()) else {
-                return;
-            };
-            (a.offer_item(offer), offer.maker == a.me(), offer.maker)
-        };
-        // the maker's recent trades, since they back the offer
-        let history = if mine { vec![] } else { a.offer_history(maker) };
-        if let Some(ui) = a.ui.upgrade() {
-            ui.set_current_offer(item);
-            ui.set_offer_history(ModelRc::new(VecModel::from(history)));
-            ui.set_back_page(0);
-            ui.set_page(1);
+        let offer = a
+            .offers
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|o| o.id.to_hex() == id.as_str())
+            .cloned();
+        if let (Some(offer), Some(ui)) = (offer, a.ui.upgrade()) {
+            a.show_offer(&ui, &offer, ui.get_page());
         }
     });
 
@@ -631,7 +629,11 @@ fn offer_problem(
             return Some("the minimum amount can't be more than the maximum".into());
         }
         (Some(_), Some(_)) => {}
-        _ => return Some(format!("enter the minimum and maximum amount in {currency}")),
+        _ => {
+            return Some(format!(
+                "enter the minimum and maximum amount in {currency}"
+            ));
+        }
     }
     if checked_names(bitcoin).is_empty() {
         return Some("pick at least one way to send bitcoin".into());
@@ -944,6 +946,17 @@ impl App {
     /// returns the relays that accepted it, and how many we tried. it is kept for the relay
     /// report popup under `title`, which opens on its own when half or more of them failed.
     async fn publish(&self, title: &str, relays: Vec<String>, evt: Event) -> (Vec<String>, usize) {
+        self.publish_tracked(title, relays, evt, |_| {}).await
+    }
+
+    /// like `publish`, also telling `on_answer` about every answer that comes in
+    async fn publish_tracked(
+        &self,
+        title: &str,
+        relays: Vec<String>,
+        evt: Event,
+        on_answer: impl Fn(&[Delivery]),
+    ) -> (Vec<String>, usize) {
         let total = relays.len();
         let id = {
             let mut sent = self.sent.lock().unwrap();
@@ -966,6 +979,7 @@ impl App {
                     s.answers = answers.to_vec();
                 }
                 self.rerender_report(&Report::Sent(id));
+                on_answer(answers);
             })
             .await;
         if mostly_failed(&answers) {
@@ -1088,23 +1102,7 @@ impl App {
             let items: Vec<SentItem> = entries
                 .into_iter()
                 .map(|(title, json, answers, note)| {
-                    let answers: Vec<RelayAnswer> = answers
-                        .iter()
-                        .map(|(url, answer)| RelayAnswer {
-                            url: url.into(),
-                            host: relay_host(url).into(),
-                            state: match answer {
-                                None => "sending",
-                                Some(Ok(())) => "ok",
-                                Some(Err(_)) => "failed",
-                            }
-                            .into(),
-                            error: match answer {
-                                Some(Err(err)) => err.into(),
-                                _ => "".into(),
-                            },
-                        })
-                        .collect();
+                    let answers = relay_answers(&answers);
                     SentItem {
                         title: title.into(),
                         note: note.into(),
@@ -1194,7 +1192,10 @@ impl App {
     /// the relays the pickers list: the defaults, the ones in use and whatever came up since the
     /// app started
     fn known_relays(&self) -> Vec<String> {
-        let mut known: Vec<String> = crate::store::DEFAULT_RELAYS.iter().map(|r| r.to_string()).collect();
+        let mut known: Vec<String> = crate::store::DEFAULT_RELAYS
+            .iter()
+            .map(|r| r.to_string())
+            .collect();
         let used = self.app_relays();
         let session = self.session_relays.lock().unwrap().clone();
         for url in used.into_iter().chain(session) {
@@ -1615,11 +1616,97 @@ impl App {
             relays: o.relays.join(", ").into(),
             description: o.description.clone().into(),
             age: ago(o.created_at).into(),
+            date: date(o.created_at).into(),
+            short_id: short_id(&o.id.to_hex()).into(),
         }
     }
 
     /// the rows shown on the offer page: the last trades with the maker, filled with our most
     /// recent ones with other people when there aren't three of those with the maker.
+    /// remember how the relays took our offer, and show it if its page is open
+    fn set_offer_deliveries(&self, id: ID, answers: &[Delivery], done: bool) {
+        {
+            let mut store = self.store.lock().unwrap();
+            if let Some(o) = store.state.my_offers.iter_mut().find(|o| o.event.id == id) {
+                o.deliveries = answers.to_vec();
+                if done {
+                    o.relays = accepted(answers);
+                    store.persist();
+                }
+            }
+        }
+        if self.current_offer.lock().unwrap().as_deref() == Some(id.to_hex().as_str()) {
+            let answers = relay_answers(&self.offer_deliveries(&id.to_hex()));
+            let _ = self.ui.upgrade_in_event_loop(move |ui| {
+                ui.set_offer_answers(ModelRc::new(VecModel::from(answers)));
+            });
+        }
+    }
+
+    /// how the relays took one of our offers. the ones of older versions only know which accepted.
+    fn offer_deliveries(&self, offer_id: &str) -> Vec<Delivery> {
+        let store = self.store.lock().unwrap();
+        let Some(o) = store
+            .state
+            .my_offers
+            .iter()
+            .find(|o| o.event.id.to_hex() == offer_id)
+        else {
+            return vec![];
+        };
+        if o.deliveries.is_empty() {
+            o.relays.iter().map(|r| (r.clone(), Some(Ok(())))).collect()
+        } else {
+            o.deliveries.clone()
+        }
+    }
+
+    /// go to the page of an offer, to come back to `back_page`
+    fn show_offer(&self, ui: &AppWindow, offer: &Offer, back_page: i32) {
+        let id = offer.id.to_hex();
+        // the maker's recent trades, since they back the offer
+        let history = if offer.maker == self.me() {
+            vec![]
+        } else {
+            self.offer_history(offer.maker)
+        };
+        let trades = self.offer_trades(&id);
+        let answers = relay_answers(&self.offer_deliveries(&id));
+        *self.current_offer.lock().unwrap() = Some(id);
+        ui.set_offer_answers(ModelRc::new(VecModel::from(answers)));
+        ui.set_current_offer(self.offer_item(offer));
+        ui.set_offer_history(ModelRc::new(VecModel::from(history)));
+        ui.set_offer_trades(ModelRc::new(VecModel::from(trades)));
+        ui.set_back_page(back_page);
+        ui.set_page(1);
+    }
+
+    /// our trades that started from this offer: all of them when it is ours, and those we
+    /// initiated when it is somebody else's. the ongoing ones first.
+    fn offer_trades(&self, offer_id: &str) -> Vec<TradeItem> {
+        let store = self.store.lock().unwrap();
+        let s = &store.state;
+        let mut ongoing: Vec<_> = s
+            .trades
+            .iter()
+            .filter(|(_, t)| t.offer_id.as_deref() == Some(offer_id))
+            .collect();
+        ongoing.sort_by_key(|(_, t)| std::cmp::Reverse(t.started_at));
+        let mut items: Vec<TradeItem> = ongoing
+            .into_iter()
+            .filter_map(|(hex, t)| ongoing_item(s, hex, t))
+            .collect();
+        items.extend(
+            store
+                .history
+                .list(usize::MAX)
+                .iter()
+                .filter(|t| t.offer_id.as_deref() == Some(offer_id))
+                .filter_map(|t| past_item(&s.labels, t)),
+        );
+        items
+    }
+
     fn offer_history(&self, maker: PubKey) -> Vec<HistoryItem> {
         const RECENT: usize = 3;
         let store = self.store.lock().unwrap();
@@ -1742,7 +1829,11 @@ impl App {
             let practice = || ModelRc::new(VecModel::from(vec![relay_item(xfk::RELAY, true)]));
             ui.set_negotiation_relays(practice());
             ui.set_publish_relays(practice());
-        } else if ui.get_negotiation_relays().iter().any(|r| r.url == xfk::RELAY) {
+        } else if ui
+            .get_negotiation_relays()
+            .iter()
+            .any(|r| r.url == xfk::RELAY)
+        {
             let d = form::defaults(&recent, &self.locale_currency);
             self.set_create_relays(ui, &d.relays, &self.app_relays());
         }
@@ -1876,8 +1967,9 @@ impl App {
             description: ui.get_create_description().trim().to_string(),
         }
         .to_event(&self.sk());
-        if let Some(offer) = Offer::from_event(&evt) {
-            self.offers.lock().unwrap().insert(0, offer);
+        let offer = Offer::from_event(&evt);
+        if let Some(offer) = &offer {
+            self.offers.lock().unwrap().insert(0, offer.clone());
         }
         self.render_offers();
 
@@ -1887,6 +1979,7 @@ impl App {
             store.state.my_offers.push(MyOffer {
                 event: evt.clone(),
                 relays: vec![],
+                deliveries: vec![],
             });
             // practice offers say nothing about how we trade for real
             if !practice {
@@ -1906,7 +1999,10 @@ impl App {
 
         self.reset_create_form(&ui);
         self.render_trades();
-        ui.set_page(0);
+        match &offer {
+            Some(offer) => self.show_offer(&ui, offer, 0),
+            None => ui.set_page(0),
+        }
         // to hear about takers
         crate::notify::request_permission();
         self.status("publishing offer…");
@@ -1920,13 +2016,14 @@ impl App {
             } else {
                 merge_relays(&publish_to, &app.my_write_relays(true).await)
             };
-            let (ok, total) = app.publish("offer", relays, evt).await;
+            let (ok, total) = app
+                .publish_tracked("offer", relays, evt, |answers| {
+                    app.set_offer_deliveries(id, answers, false)
+                })
+                .await;
             app.status(format!("offer published to {}/{total} relays", ok.len()));
-            let mut store = app.store.lock().unwrap();
-            if let Some(o) = store.state.my_offers.iter_mut().find(|o| o.event.id == id) {
-                o.relays = ok;
-                store.persist();
-            }
+            let answers = app.offer_deliveries(&id.to_hex());
+            app.set_offer_deliveries(id, &answers, true);
         });
     }
 
@@ -2432,9 +2529,16 @@ impl App {
                 };
                 let peer = t.peer.parse().unwrap_or(peer);
                 let view = TradeView {
+                    trade_id: t.trade_id.clone().into(),
+                    offer_id: t.offer_id.clone().unwrap_or_default().into(),
                     ongoing: true,
-                    // stored summaries may pre-date the "maker " word being shown inline, drop it
-                    summary: t.offer_summary.trim_start_matches("maker ").into(),
+                    summary: heading(
+                        t.offer.as_ref(),
+                        &t.trade_id,
+                        t.offer_id.as_deref(),
+                        &t.offer_summary,
+                    )
+                    .into(),
                     ..Default::default()
                 };
                 (
@@ -2461,9 +2565,17 @@ impl App {
                     })
                     .collect();
                 let view = TradeView {
+                    trade_id: t.trade_id.clone().into(),
+                    offer_id: t.offer_id.clone().unwrap_or_default().into(),
                     ongoing: false,
                     pending: t.outcome == Outcome::Concluded,
-                    summary: t.offer_summary.trim_start_matches("maker ").into(),
+                    summary: heading(
+                        t.offer.as_ref(),
+                        &t.trade_id,
+                        t.offer_id.as_deref(),
+                        &t.offer_summary,
+                    )
+                    .into(),
                     ..Default::default()
                 };
                 (peer, (view, t.offer, t.messages, None), reviews)
@@ -2905,10 +3017,7 @@ impl App {
         if self.offline {
             return;
         }
-        let offers = self
-            .open_offers()
-            .iter()
-            .any(|o| !xfk::is_xfk(&o.currency));
+        let offers = self.open_offers().iter().any(|o| !xfk::is_xfk(&o.currency));
         let wanted = offers
             || self
                 .store
@@ -2942,41 +3051,9 @@ impl App {
             });
             let ongoing: Vec<TradeItem> = trades
                 .into_iter()
-                .filter_map(|(hex, t)| {
-                    let pk: PubKey = t.peer.parse().ok()?;
-                    let key: PubKey = hex.parse().ok()?;
-                    Some(TradeItem {
-                        key: key.to_npub().into(),
-                        peer_name: display_name(&s.labels, &pk).into(),
-                        peer_color: key_color(&pk),
-                        summary: t.offer_summary.trim_start_matches("maker ").into(),
-                        status: trade_status(t).into(),
-                        last: t
-                            .messages
-                            .last()
-                            .zip(shown_messages(t.offer.as_ref(), &t.messages).pop())
-                            .map(|(m, shown)| {
-                                format!("{}{}", if m.mine { "you: " } else { "" }, shown.text)
-                            })
-                            .unwrap_or_default()
-                            .into(),
-                        blocked: s.blocked.contains(&t.peer),
-                    })
-                })
+                .filter_map(|(hex, t)| ongoing_item(s, hex, t))
                 .collect();
-            let labels = s.labels.clone();
-            let past_item = |t: &PastTrade| {
-                let pk: PubKey = t.peer.parse().ok()?;
-                Some(TradeItem {
-                    key: t.trade_id.clone().into(),
-                    peer_name: display_name(&labels, &pk).into(),
-                    peer_color: key_color(&pk),
-                    summary: t.offer_summary.trim_start_matches("maker ").into(),
-                    status: past_status(t).into(),
-                    last: ago(Timestamp(t.ended_at)).into(),
-                    blocked: false,
-                })
-            };
+            let past_item = |t: &PastTrade| past_item(&s.labels, t);
             // concluded ones stay here until reviewed or archived, however many they are
             let (waiting, rest): (Vec<_>, Vec<_>) = store
                 .history
@@ -2995,6 +3072,9 @@ impl App {
                 .any(|t| t.outcome != Outcome::Archived && real_trade(t.offer.as_ref()));
             (ongoing, pending, past, concluded)
         };
+        // the page of the offer being looked at lists trades too
+        let current = self.current_offer.lock().unwrap().clone();
+        let offer_trades = current.map(|id| self.offer_trades(&id));
         // the tip stays until a real trade went all the way, practice doesn't count
         let newcomer = !concluded;
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
@@ -3003,6 +3083,9 @@ impl App {
             ui.set_ongoing_trades(ModelRc::new(VecModel::from(ongoing)));
             ui.set_pending_trades(ModelRc::new(VecModel::from(pending)));
             ui.set_past_trades(ModelRc::new(VecModel::from(past)));
+            if let Some(trades) = offer_trades {
+                ui.set_offer_trades(ModelRc::new(VecModel::from(trades)));
+            }
         });
         self.sync_background();
     }
@@ -3641,13 +3724,14 @@ fn deal_view(
         ))
     };
     if deal.concluded() {
-        view.review_hint = "Both sides say they have sent their part. There is no hurry to review: \
+        view.review_hint =
+            "Both sides say they have sent their part. There is no hurry to review: \
              wait until you have really checked that you got what you were owed. If the payment \
              can be reversed (cards, PayPal, some bank transfers), consider waiting a day or two \
              for a reversal before you rate them, as a review is public. You can conclude the \
              trade now and review it later, or archive it if you never will, and delete a \
              review if you change your mind."
-            .into();
+                .into();
     }
     for step in deal.available(terms, me) {
         match step {
@@ -3728,6 +3812,26 @@ fn past_status(t: &PastTrade) -> String {
 }
 
 /// the relays that took it
+fn relay_answers(answers: &[Delivery]) -> Vec<RelayAnswer> {
+    answers
+        .iter()
+        .map(|(url, answer)| RelayAnswer {
+            url: url.into(),
+            host: relay_host(url).into(),
+            state: match answer {
+                None => "sending",
+                Some(Ok(())) => "ok",
+                Some(Err(_)) => "failed",
+            }
+            .into(),
+            error: match answer {
+                Some(Err(err)) => err.into(),
+                _ => "".into(),
+            },
+        })
+        .collect()
+}
+
 fn accepted(answers: &[Delivery]) -> Vec<String> {
     answers
         .iter()
@@ -3823,6 +3927,112 @@ fn short_npub(pk: &PubKey) -> String {
     format!("{}…{}", &npub[..12], &npub[npub.len() - 6..])
 }
 
+fn ongoing_item(s: &crate::store::State, hex: &str, t: &Trade) -> Option<TradeItem> {
+    let pk: PubKey = t.peer.parse().ok()?;
+    let key: PubKey = hex.parse().ok()?;
+    Some(TradeItem {
+        key: key.to_npub().into(),
+        peer_name: display_name(&s.labels, &pk).into(),
+        peer_color: key_color(&pk),
+        summary: heading(
+            t.offer.as_ref(),
+            &t.trade_id,
+            t.offer_id.as_deref(),
+            &t.offer_summary,
+        )
+        .into(),
+        status: trade_status(t).into(),
+        last: t
+            .messages
+            .last()
+            .zip(shown_messages(t.offer.as_ref(), &t.messages).pop())
+            .map(|(m, shown)| format!("{}{}", if m.mine { "you: " } else { "" }, shown.text))
+            .unwrap_or_default()
+            .into(),
+        blocked: s.blocked.contains(&t.peer),
+        dates: format!("opened {}", date(Timestamp(t.started_at))).into(),
+        ongoing: true,
+    })
+}
+
+fn past_item(labels: &BTreeMap<String, String>, t: &PastTrade) -> Option<TradeItem> {
+    let pk: PubKey = t.peer.parse().ok()?;
+    Some(TradeItem {
+        key: t.trade_id.clone().into(),
+        peer_name: display_name(labels, &pk).into(),
+        peer_color: key_color(&pk),
+        summary: heading(
+            t.offer.as_ref(),
+            &t.trade_id,
+            t.offer_id.as_deref(),
+            &t.offer_summary,
+        )
+        .into(),
+        status: past_status(t).into(),
+        last: ago(Timestamp(t.ended_at)).into(),
+        blocked: false,
+        ongoing: false,
+        dates: format!(
+            "opened {} · {} {}",
+            date(Timestamp(t.started_at)),
+            match t.outcome {
+                Outcome::Archived => "archived",
+                _ => "concluded",
+            },
+            date(Timestamp(t.ended_at))
+        )
+        .into(),
+    })
+}
+
+/// the start of an id, enough to tell them apart and to quote
+fn short_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+/// what names a trade in its card and page: "USD · trade #1a2b3c4d · offer #5e6f7a8b", leaving
+/// out what we don't have. `fallback` is the stored description, for chats that have neither.
+fn heading(
+    terms: Option<&OfferTerms>,
+    trade_id: &str,
+    offer_id: Option<&str>,
+    fallback: &str,
+) -> String {
+    let mut parts = vec![];
+    if let Some(terms) = terms {
+        parts.push(terms.currency.clone());
+    }
+    if !trade_id.is_empty() {
+        parts.push(format!("trade #{}", short_id(trade_id)));
+    }
+    if let Some(id) = offer_id.filter(|id| !id.is_empty()) {
+        parts.push(format!("offer #{}", short_id(id)));
+    }
+    if parts.is_empty() {
+        fallback.trim_start_matches("maker ").into()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// "3 Oct 2026", in UTC
+fn date(ts: Timestamp) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    // days since the epoch to a civil date
+    let z = (ts.0 / 86400) as i64 + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + (month <= 2) as i64;
+    format!("{day} {} {year}", MONTHS[month as usize - 1])
+}
+
 fn ago(ts: Timestamp) -> String {
     let secs = now().0.saturating_sub(ts.0);
     match secs {
@@ -3844,6 +4054,12 @@ fn amount_range(min: f64, max: f64, currency: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dates() {
+        assert_eq!(super::date(super::Timestamp(0)), "1 Jan 1970");
+        assert_eq!(super::date(super::Timestamp(1_760_918_400)), "20 Oct 2025");
+    }
+
     #[test]
     fn thousands() {
         assert_eq!(super::thousands(1234567.4), "1,234,567");

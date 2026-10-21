@@ -156,7 +156,8 @@ impl MemoryRelay {
             inner.events.push(evt.clone());
         }
         inner.subs.retain(|(filter, tx)| {
-            !tx.is_closed() && (!filter.matches(evt) || tx.send(Occurrence::Event(evt.clone())).is_ok())
+            !tx.is_closed()
+                && (!filter.matches(evt) || tx.send(Occurrence::Event(evt.clone())).is_ok())
         });
         if stored {
             self.persist(&mut inner);
@@ -337,7 +338,7 @@ fn expired(evt: &Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ritualistic::{EventTemplate, Kind, SecretKey, Tags, TagQuery};
+    use ritualistic::{EventTemplate, Kind, SecretKey, TagQuery, Tags};
 
     fn event(sk: &SecretKey, kind: u16, tags: Vec<Vec<String>>) -> Event {
         EventTemplate {
@@ -385,7 +386,10 @@ mod tests {
 
         // ephemeral ones aren't kept, deleted ones go, and only by their author
         let other = SecretKey::generate();
-        relay.publish(&[], event(&other, 5, vec![vec!["e".into(), note.id.to_hex()]]));
+        relay.publish(
+            &[],
+            event(&other, 5, vec![vec!["e".into(), note.id.to_hex()]]),
+        );
         let all = |relay: &MemoryRelay| {
             drain(&mut relay.subscribe(
                 &[],

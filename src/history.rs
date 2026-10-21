@@ -238,7 +238,10 @@ impl History {
                 .unwrap_or_default()
         };
         let mut doomed = query(Filter {
-            tags: Some(vec![TagQuery(TRADE_REF.into(), vec![trade.trade_id.clone()])]),
+            tags: Some(vec![TagQuery(
+                TRADE_REF.into(),
+                vec![trade.trade_id.clone()],
+            )]),
             ..Default::default()
         });
         doomed.retain(|e| e.kind != KIND_TRADE_SUCCESS && e.kind != KIND_TRADE_FAILURE);
@@ -294,7 +297,9 @@ impl Store {
             }
             let started_by_me = ping.pubkey == me;
             let peer = if started_by_me {
-                ping.tags.find("p").and_then(|t| t[1].parse::<PubKey>().ok())
+                ping.tags
+                    .find("p")
+                    .and_then(|t| t[1].parse::<PubKey>().ok())
             } else {
                 Some(ping.pubkey)
             };
@@ -332,9 +337,9 @@ impl Store {
                 } else if evt.kind == KIND_MARK {
                     match mark_of(evt) {
                         Some(MARK_OFFER) => {
-                            offer = serde_json::from_str::<OfferMark>(&evt.content).ok().map(|m| {
-                                (m, evt.tags.find("e").map(|t| t[1].clone()))
-                            });
+                            offer = serde_json::from_str::<OfferMark>(&evt.content)
+                                .ok()
+                                .map(|m| (m, evt.tags.find("e").map(|t| t[1].clone())));
                         }
                         Some(MARK_PRICE_CHECK) => trade.price_check = evt.content.parse().ok(),
                         Some(MARK_CONCLUDED) => standing.push((at, Standing::Concluded)),
@@ -376,7 +381,10 @@ impl Store {
             // the last thing that happened to it, and of those that happened together, the one
             // that came after the others
             let Some(&(_, last)) = standing.iter().max_by_key(|(at, s)| (*at, *s)) else {
-                ongoing.insert(Conversation::new(sk, peer, &trade_id).pubkey().to_hex(), trade);
+                ongoing.insert(
+                    Conversation::new(sk, peer, &trade_id).pubkey().to_hex(),
+                    trade,
+                );
                 continue;
             };
             let ended_at = standing
@@ -394,7 +402,10 @@ impl Store {
                     } else {
                         Outcome::Failure
                     },
-                    reviews.last().map(|r| r.comment.clone()).unwrap_or_default(),
+                    reviews
+                        .last()
+                        .map(|r| r.comment.clone())
+                        .unwrap_or_default(),
                 ),
             };
             over.push(PastTrade {
@@ -526,7 +537,9 @@ mod tests {
             [true, false, true]
         );
         // it is the conversation key that finds it again
-        let key = Conversation::new(&me, a.pubkey(), "going").pubkey().to_hex();
+        let key = Conversation::new(&me, a.pubkey(), "going")
+            .pubkey()
+            .to_hex();
         assert!(store.state.trades.contains_key(&key));
 
         let past = store.history.list(10);
@@ -563,7 +576,11 @@ mod tests {
         );
 
         // forgetting a trade takes its ping and messages along, and nothing else
-        let id = store.history.latest(|t| t.trade_id == "done").unwrap().trade_id;
+        let id = store
+            .history
+            .latest(|t| t.trade_id == "done")
+            .unwrap()
+            .trade_id;
         store.history.delete(&id);
         store.load_trades(&me, |_, _| vec![]);
         assert!(store.history.latest(|t| t.trade_id == "done").is_none());

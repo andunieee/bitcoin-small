@@ -61,8 +61,7 @@ impl Files for Dir {
 /// directory, unless it already has a key.
 #[cfg(not(target_arch = "wasm32"))]
 fn move_keys(data_dir: &std::path::Path, config_dir: &std::path::Path) {
-    if data_dir == config_dir || config_dir.join("key").exists() || !data_dir.join("key").exists()
-    {
+    if data_dir == config_dir || config_dir.join("key").exists() || !data_dir.join("key").exists() {
         return;
     }
     let Ok(entries) = std::fs::read_dir(data_dir) else {
@@ -185,6 +184,9 @@ pub struct MyOffer {
     pub event: Event,
     /// relays that accepted it, where the deletion goes when we close it
     pub relays: Vec<String>,
+    /// how each relay took it when we published it, empty for offers of older versions
+    #[serde(default)]
+    pub deliveries: Vec<Delivery>,
 }
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]

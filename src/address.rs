@@ -96,8 +96,7 @@ fn invoice_msat(amount: &str) -> Option<Option<u64>> {
         c @ (b'm' | b'u' | b'n' | b'p') => (&amount[..amount.len() - 1], Some(c)),
         _ => (amount, None),
     };
-    if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) || digits.starts_with('0')
-    {
+    if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) || digits.starts_with('0') {
         return None;
     }
     let n: u64 = digits.parse().ok()?;
@@ -194,7 +193,11 @@ fn checksummed(lower: &str, prefix: &str) -> String {
         .enumerate()
         .map(|(i, c)| {
             let nibble = (hash[i / 2] >> if i % 2 == 0 { 4 } else { 0 }) & 0xf;
-            if nibble >= 8 { c.to_ascii_uppercase() } else { c }
+            if nibble >= 8 {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            }
         })
         .collect()
 }
@@ -213,7 +216,13 @@ struct Code {
 }
 
 const BECH32: Code = Code {
-    generators: [0x3b6a_57b2, 0x2650_8e6d, 0x1ea1_19fa, 0x3d42_33dd, 0x2a14_62b3],
+    generators: [
+        0x3b6a_57b2,
+        0x2650_8e6d,
+        0x1ea1_19fa,
+        0x3d42_33dd,
+        0x2a14_62b3,
+    ],
     checksum_len: 6,
     bits: 30,
 };
@@ -366,7 +375,12 @@ mod tests {
             assert!(ok("on-chain", a), "{a}");
         }
         assert_eq!(
-            parse("on-chain", "BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4", None).unwrap(),
+            parse(
+                "on-chain",
+                "BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4",
+                None
+            )
+            .unwrap(),
             "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
         );
         for a in [
@@ -408,7 +422,12 @@ mod tests {
             parse("lightning", " Satoshi@Example.com ", None).unwrap(),
             "satoshi@example.com"
         );
-        for bad in ["@example.com", "me@localhost", "me@exa_mple.com", "a b@x.com"] {
+        for bad in [
+            "@example.com",
+            "me@localhost",
+            "me@exa_mple.com",
+            "a b@x.com",
+        ] {
             assert!(!ok("lightning", bad), "{bad}");
         }
     }

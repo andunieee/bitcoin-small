@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use crate::prices;
-use crate::protocol::{payment_methods_for, DEFAULT_BITCOIN_METHODS};
+use crate::protocol::{DEFAULT_BITCOIN_METHODS, payment_methods_for};
 
 /// relays where people reach us about an offer.
 pub const DEFAULT_NEGOTIATION_RELAYS: &[&str] = &["wss://nostr.wine"];

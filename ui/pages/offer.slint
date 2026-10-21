@@ -1,10 +1,16 @@
 import { ScrollView, Palette } from "std-widgets.slint";
-import { OfferItem, HistoryItem } from "../models.slint";
-import { Card, Title, Muted, SideBadge, Identity, Button, RawTrigger } from "../widgets.slint";
+import { OfferItem, HistoryItem, TradeItem, RelayAnswer } from "../models.slint";
+import { TradeCard, RelayAnswers } from "../trade_widgets.slint";
+import { Card, Title, Muted, SideBadge, Identity, Button, RawTrigger, Selectable } from "../widgets.slint";
 
 export component OfferPage inherits ScrollView {
     in property <OfferItem> current-offer;
     in property <[HistoryItem]> history;
+    in property <[TradeItem]> trades;
+    in property <[RelayAnswer]> answers;
+    callback open-relay-site(string);
+    callback open-trade(string);
+    callback open-past-trade(string);
     callback open-profile(string);
     callback contact-maker(string);
     callback close-offer(string);
@@ -26,7 +32,7 @@ export component OfferPage inherits ScrollView {
             }
 
             Title {
-                text: "bitcoin for " + root.current-offer.currency;
+                text: root.current-offer.currency + " · #" + root.current-offer.short-id;
             }
         }
 
@@ -81,7 +87,52 @@ export component OfferPage inherits ScrollView {
                 }
 
                 Muted {
-                    text: "posted " + root.current-offer.age;
+                    text: "posted " + root.current-offer.date + " (" + root.current-offer.age + ")";
+                }
+
+                HorizontalLayout {
+                    spacing: 4px;
+                    Muted {
+                        text: "offer id:";
+                    }
+
+                    Selectable {
+                        text: root.current-offer.id;
+                        font-size: 12px;
+                        color: Palette.foreground.transparentize(40%);
+                    }
+                }
+            }
+        }
+
+        if root.current-offer.mine && root.answers.length > 0: Card {
+            VerticalLayout {
+                padding: 12px;
+                spacing: 6px;
+                Text {
+                    text: "Published to";
+                    font-weight: 700;
+                }
+
+                RelayAnswers {
+                    answers: root.answers;
+                    open-relay-site(host) => {
+                        root.open-relay-site(host);
+                    }
+                }
+            }
+        }
+        if root.trades.length > 0: Title {
+            text: root.current-offer.mine ? "Trades on this offer" : "Your trades on this offer";
+            font-size: 16px;
+        }
+        for t in root.trades: TradeCard {
+            item: t;
+            clicked => {
+                if t.ongoing {
+                    root.open-trade(t.key);
+                } else {
+                    root.open-past-trade(t.key);
                 }
             }
         }

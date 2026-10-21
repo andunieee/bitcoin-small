@@ -1,5 +1,5 @@
 import { TextEdit, Palette } from "std-widgets.slint";
-import { TradeItem, SentItem } from "models.slint";
+import { TradeItem, SentItem, RelayAnswer } from "models.slint";
 import { Card, Muted, Identity, Button } from "widgets.slint";
 
 // what can be done with an ongoing trade, from the header of its page. a trade can only be
@@ -28,24 +28,13 @@ export component TradeActions inherits HorizontalLayout {
     }
 }
 
-// one thing in the relay report popup: each relay's answer, and the raw event behind a toggle
-export component SentReport inherits VerticalLayout {
-    in property <SentItem> item;
-    property <bool> show-json;
+// each relay's answer to something we sent
+export component RelayAnswers inherits VerticalLayout {
+    in property <[RelayAnswer]> answers;
     callback open-relay-site(string);
     spacing: 4px;
 
-    Text {
-        text: root.item.title;
-        font-weight: 700;
-        wrap: word-wrap;
-    }
-
-    if root.item.note != "": Muted {
-        text: root.item.note;
-    }
-
-    for answer in root.item.answers: HorizontalLayout {
+    for answer in root.answers: HorizontalLayout {
         spacing: 8px;
         Text {
             width: 16px;
@@ -71,6 +60,31 @@ export component SentReport inherits VerticalLayout {
             if answer.error != "": Muted {
                 text: answer.error;
             }
+        }
+    }
+}
+
+// one thing in the relay report popup: each relay's answer, and the raw event behind a toggle
+export component SentReport inherits VerticalLayout {
+    in property <SentItem> item;
+    property <bool> show-json;
+    callback open-relay-site(string);
+    spacing: 4px;
+
+    Text {
+        text: root.item.title;
+        font-weight: 700;
+        wrap: word-wrap;
+    }
+
+    if root.item.note != "": Muted {
+        text: root.item.note;
+    }
+
+    RelayAnswers {
+        answers: root.item.answers;
+        open-relay-site(host) => {
+            root.open-relay-site(host);
         }
     }
 
@@ -128,6 +142,10 @@ export component TradeCard inherits Rectangle {
 
         Muted {
             text: root.item.summary;
+        }
+
+        Muted {
+            text: root.item.dates;
         }
 
         if root.item.last != "": Text {

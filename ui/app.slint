@@ -1,5 +1,5 @@
 import { ScrollView, Palette } from "std-widgets.slint";
-import { OfferItem, HistoryItem, TradeItem, TradeView, DealView, MsgItem, PastReviewItem, ReviewItem, PersonItem, RelayItem, SentItem, PayItem } from "models.slint";
+import { OfferItem, HistoryItem, TradeItem, TradeView, DealView, MsgItem, PastReviewItem, ReviewItem, PersonItem, RelayItem, RelayAnswer, SentItem, PayItem } from "models.slint";
 import { Card, Title, Button, NavButton } from "widgets.slint";
 import { SentReport } from "trade_widgets.slint";
 import { MarketPage } from "pages/market.slint";
@@ -39,6 +39,8 @@ export component AppWindow inherits Window {
     in property <OfferItem> current-offer;
     // the recent trades shown on the offer page
     in property <[HistoryItem]> offer-history;
+    in property <[TradeItem]> offer-trades;
+    in property <[RelayAnswer]> offer-answers;
     callback refresh-offers();
     callback filters-changed();
     callback open-offer(string);
@@ -155,8 +157,8 @@ export component AppWindow inherits Window {
         if root.sent-open {
             root.close-sent();
         } else if root.page == 1 || root.page == 5 {
-            // the offer is reached from the market, the profile from wherever it was opened
-            root.page = root.page == 1 ? 0 : root.back-page;
+            // the offer and the profile go back to wherever they were opened from
+            root.page = root.back-page;
         } else if root.page == 4 {
             // the trade view is reached from the trades tab, or from a profile opened from it
             root.page = 3;
@@ -280,6 +282,17 @@ export component AppWindow inherits Window {
                         }
                         current-offer: root.current-offer;
                         history: root.offer-history;
+                        trades: root.offer-trades;
+                        answers: root.offer-answers;
+                        open-relay-site(host) => {
+                            root.open-relay-site(host);
+                        }
+                        open-trade(key) => {
+                            root.open-trade(key);
+                        }
+                        open-past-trade(key) => {
+                            root.open-past-trade(key);
+                        }
                         open-profile(who) => {
                             root.open-profile(who);
                         }
@@ -293,7 +306,7 @@ export component AppWindow inherits Window {
                             root.open-past-trade(id);
                         }
                         back => {
-                            root.page = 0;
+                            root.page = root.back-page;
                         }
                     }
 
@@ -355,6 +368,9 @@ export component AppWindow inherits Window {
                         past-trades: root.past-trades;
                         close-offer(id) => {
                             root.close-offer(id);
+                        }
+                        open-offer(id) => {
+                            root.open-offer(id);
                         }
                         open-trade(key) => {
                             root.open-trade(key);

@@ -9,6 +9,7 @@ export component TradesPage inherits ScrollView {
     in property <[TradeItem]> pending-trades;
     in property <[TradeItem]> past-trades;
     callback close-offer(string);
+    callback open-offer(string);
     callback open-trade(string);
     callback open-past-trade(string);
 
@@ -27,6 +28,13 @@ export component TradesPage inherits ScrollView {
             text: "none.";
         }
         for offer in root.my-offers: Card {
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.open-offer(offer.id);
+                }
+            }
+
             HorizontalLayout {
                 padding: 10px;
                 spacing: 8px;
@@ -45,7 +53,7 @@ export component TradesPage inherits ScrollView {
                     }
 
                     Muted {
-                        text: offer.amount + " · " + offer.payments + " · posted " + offer.age;
+                        text: offer.amount + " · " + offer.payments + " · posted " + offer.date + " (" + offer.age + ") · #" + offer.short-id;
                     }
                 }
 

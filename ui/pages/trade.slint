@@ -104,6 +104,31 @@ export component TradePage inherits VerticalLayout {
                 }
             }
 
+            if root.trade.trade-id != "": HorizontalLayout {
+                spacing: 4px;
+                Muted {
+                    text: "trade id:";
+                }
+
+                Selectable {
+                    text: root.trade.trade-id;
+                    font-size: 12px;
+                    color: Palette.foreground.transparentize(40%);
+                }
+            }
+            if root.trade.offer-id != "": HorizontalLayout {
+                spacing: 4px;
+                Muted {
+                    text: "offer id:";
+                }
+
+                Selectable {
+                    text: root.trade.offer-id;
+                    font-size: 12px;
+                    color: Palette.foreground.transparentize(40%);
+                }
+            }
+
             if root.trade-concluding: VerticalLayout {
                 spacing: 8px;
                 Text {

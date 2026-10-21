@@ -30,6 +30,9 @@ export struct OfferItem {
     relays: string,
     description: string,
     age: string,
+    date: string,
+    // the first characters of the id, for the cards
+    short-id: string,
 }
 
 export struct TradeItem {
@@ -40,6 +43,10 @@ export struct TradeItem {
     summary: string,
     status: string,
     last: string,
+    // when it was opened, and concluded or archived
+    dates: string,
+    // still going, as opposed to concluded or archived
+    ongoing: bool,
     blocked: bool,
 }
 
@@ -55,6 +62,9 @@ export struct TradeView {
     ongoing: bool,
     // over and concluded, waiting for a review or to be archived
     pending: bool,
+    // the full ids, empty when unknown
+    trade-id: string,
+    offer-id: string,
     peer: string,
     peer-name: string,
     peer-color: color,

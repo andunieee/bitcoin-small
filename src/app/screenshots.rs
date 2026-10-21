@@ -556,15 +556,21 @@ fn seed(store: &mut Store, me: &SecretKey) -> Demo {
         &terms,
         9,
         vec![
-        (Taker, Line::Text("hey lucas, still around?")),
-        (Maker, Line::Text("yep, go ahead")),
-        (Taker, Line::Act(Action::Amount(40.0))),
-        (Maker, Line::Act(Action::Price(price.round()))),
-        (Taker, Line::Act(Action::BitcoinMethod("lightning".into()))),
-        (Taker, Line::Act(Action::PaymentMethod("Zelle".into()))),
-        (Taker, Line::Act(Action::BitcoinDetails("satstacker@example.com".into()))),
-        (Maker, Line::Act(Action::PaymentDetails("lucas.m@example.com".into()))),
-    ],
+            (Taker, Line::Text("hey lucas, still around?")),
+            (Maker, Line::Text("yep, go ahead")),
+            (Taker, Line::Act(Action::Amount(40.0))),
+            (Maker, Line::Act(Action::Price(price.round()))),
+            (Taker, Line::Act(Action::BitcoinMethod("lightning".into()))),
+            (Taker, Line::Act(Action::PaymentMethod("Zelle".into()))),
+            (
+                Taker,
+                Line::Act(Action::BitcoinDetails("satstacker@example.com".into())),
+            ),
+            (
+                Maker,
+                Line::Act(Action::PaymentDetails("lucas.m@example.com".into())),
+            ),
+        ],
     );
     let with_lucas = Trade {
         peer: lucas.pubkey().to_hex(),

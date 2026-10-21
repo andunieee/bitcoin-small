@@ -137,32 +137,35 @@ mod imp {
             return;
         }
         std::thread::spawn(move || {
-            let ok = with_activity("failed to change the foreground service", |env, activity| {
-                let intent = env.new_object("android/content/Intent", "()V", &[])?;
-                let class = env.new_string(SERVICE)?;
-                env.call_method(
-                    &intent,
-                    "setClassName",
-                    "(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;",
-                    &[activity.into(), (&class).into()],
-                )?;
-                if on {
+            let ok = with_activity(
+                "failed to change the foreground service",
+                |env, activity| {
+                    let intent = env.new_object("android/content/Intent", "()V", &[])?;
+                    let class = env.new_string(SERVICE)?;
                     env.call_method(
-                        activity,
-                        "startForegroundService",
-                        "(Landroid/content/Intent;)Landroid/content/ComponentName;",
-                        &[(&intent).into()],
+                        &intent,
+                        "setClassName",
+                        "(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;",
+                        &[activity.into(), (&class).into()],
                     )?;
-                } else {
-                    env.call_method(
-                        activity,
-                        "stopService",
-                        "(Landroid/content/Intent;)Z",
-                        &[(&intent).into()],
-                    )?;
-                }
-                Ok(())
-            });
+                    if on {
+                        env.call_method(
+                            activity,
+                            "startForegroundService",
+                            "(Landroid/content/Intent;)Landroid/content/ComponentName;",
+                            &[(&intent).into()],
+                        )?;
+                    } else {
+                        env.call_method(
+                            activity,
+                            "stopService",
+                            "(Landroid/content/Intent;)Z",
+                            &[(&intent).into()],
+                        )?;
+                    }
+                    Ok(())
+                },
+            );
             if !ok {
                 // so the next check tries again
                 BACKGROUND.store(!on, Ordering::SeqCst);
@@ -309,35 +312,38 @@ mod imp {
     /// android 13 and later only show them once the user allowed it
     pub fn request_permission() {
         std::thread::spawn(|| {
-            with_activity("failed to ask for the notification permission", |env, activity| {
-                let sdk = env
-                    .get_static_field("android/os/Build$VERSION", "SDK_INT", "I")?
-                    .i()?;
-                if sdk < 33 {
-                    return Ok(());
-                }
-                let permission = env.new_string("android.permission.POST_NOTIFICATIONS")?;
-                let granted = env
-                    .call_method(
+            with_activity(
+                "failed to ask for the notification permission",
+                |env, activity| {
+                    let sdk = env
+                        .get_static_field("android/os/Build$VERSION", "SDK_INT", "I")?
+                        .i()?;
+                    if sdk < 33 {
+                        return Ok(());
+                    }
+                    let permission = env.new_string("android.permission.POST_NOTIFICATIONS")?;
+                    let granted = env
+                        .call_method(
+                            activity,
+                            "checkSelfPermission",
+                            "(Ljava/lang/String;)I",
+                            &[(&permission).into()],
+                        )?
+                        .i()?;
+                    // PackageManager.PERMISSION_GRANTED
+                    if granted == 0 {
+                        return Ok(());
+                    }
+                    let permissions = env.new_object_array(1, "java/lang/String", &permission)?;
+                    env.call_method(
                         activity,
-                        "checkSelfPermission",
-                        "(Ljava/lang/String;)I",
-                        &[(&permission).into()],
-                    )?
-                    .i()?;
-                // PackageManager.PERMISSION_GRANTED
-                if granted == 0 {
-                    return Ok(());
-                }
-                let permissions = env.new_object_array(1, "java/lang/String", &permission)?;
-                env.call_method(
-                    activity,
-                    "requestPermissions",
-                    "([Ljava/lang/String;I)V",
-                    &[(&permissions).into(), JValue::Int(1)],
-                )?;
-                Ok(())
-            })
+                        "requestPermissions",
+                        "([Ljava/lang/String;I)V",
+                        &[(&permissions).into(), JValue::Int(1)],
+                    )?;
+                    Ok(())
+                },
+            )
         });
     }
 }

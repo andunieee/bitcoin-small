@@ -85,21 +85,14 @@ impl Persona {
             payment_methods: vec!["Play money".into(), "Bank transfer".into()],
             bitcoin_methods: BITCOIN_METHODS.iter().map(|m| m.to_string()).collect(),
             relays: vec![RELAY.into()],
-            description: format!(
-                "I'm just a fake {} to practice with.",
-                self.name()
-            ),
+            description: format!("I'm just a fake {} to practice with.", self.name()),
         })
     }
 
     fn hello(self) -> &'static str {
         match self {
-            Persona::Seller | Persona::Buyer => {
-                "hello! how do you want to do this fake trade?"
-            }
-            Persona::Taker => {
-                "hello! are you there for this little fake trade? I'll start"
-            }
+            Persona::Seller | Persona::Buyer => "hello! how do you want to do this fake trade?",
+            Persona::Taker => "hello! are you there for this little fake trade? I'll start",
         }
     }
 }
@@ -303,7 +296,10 @@ impl Bot {
             .map_err(std::io::Error::other)
             .and_then(|json| self.files.write(&self.persona.state_file(), &json));
         if let Err(err) = res {
-            log::warn!("the XFK {} failed to save its state: {err}", self.persona.name());
+            log::warn!(
+                "the XFK {} failed to save its state: {err}",
+                self.persona.name()
+            );
         }
     }
 
@@ -443,9 +439,14 @@ impl Bot {
             if self.taken.lock().unwrap().contains(&offer.id.to_hex()) {
                 continue;
             }
-            let busy = self.talks.lock().unwrap().get(&offer.maker).is_some_and(|t| {
-                !t.deal().concluded() && t.last_activity() + ABANDONED_SECS > now().0
-            });
+            let busy = self
+                .talks
+                .lock()
+                .unwrap()
+                .get(&offer.maker)
+                .is_some_and(|t| {
+                    !t.deal().concluded() && t.last_activity() + ABANDONED_SECS > now().0
+                });
             if busy {
                 continue;
             }
@@ -598,7 +599,11 @@ impl Bot {
         } else {
             text
         };
-        let offer = t.saved.offer_id.as_deref().and_then(|h| ID::from_hex(h).ok());
+        let offer = t
+            .saved
+            .offer_id
+            .as_deref()
+            .and_then(|h| ID::from_hex(h).ok());
         let action = action.map(|a| a.to_tag());
         let (rumor, evt) = t.conv.wrap(&self.me, &text, offer, action.clone());
         t.messages.push(Message {
@@ -700,7 +705,9 @@ mod tests {
                     .await
                     .expect("they took too long")
                     .expect("the subscription ended");
-                let Occurrence::Event(evt) = occ else { continue };
+                let Occurrence::Event(evt) = occ else {
+                    continue;
+                };
                 let rumor = self.conv.unwrap(&evt).unwrap();
                 if rumor.pubkey == self.sk.pubkey().to_hex() {
                     continue;
@@ -724,9 +731,9 @@ mod tests {
             deal.check(&self.terms, me, &action).unwrap();
             let text = action.text(&self.terms, me, &deal);
             let tag = action.to_tag();
-            let (rumor, evt) = self
-                .conv
-                .wrap(&self.sk.pubkey(), &text, self.offer, Some(tag.clone()));
+            let (rumor, evt) =
+                self.conv
+                    .wrap(&self.sk.pubkey(), &text, self.offer, Some(tag.clone()));
             self.messages.push(Message {
                 id: rumor.id,
                 created_at: rumor.created_at,

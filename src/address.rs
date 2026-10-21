@@ -1,5 +1,5 @@
-//! where the bitcoin goes, checked before it is sent: a typo in an address or an invoice loses
-//! the coins for good. each method has its own formats, and methods we don't know are taken as
+//! where the bitcoin goes, checked before it is sent: a typo in an address or an invoice can
+//! cause money loss. Each method has its own formats, and methods we don't know are taken as
 //! they are, to be agreed in the chat.
 
 use sha2::{Digest, Sha256};
@@ -311,6 +311,31 @@ fn program_ok(version: u8, len: usize) -> bool {
     }
 }
 
+/// `bytes` as a bech32 string of `hrp`
+pub fn bech32_encode(hrp: &str, bytes: &[u8]) -> String {
+    let (mut acc, mut bits, mut data) = (0u32, 0u32, vec![]);
+    for b in bytes {
+        acc = (acc << 8) | *b as u32;
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            data.push(((acc >> bits) & 31) as u8);
+        }
+    }
+    if bits > 0 {
+        data.push(((acc << (5 - bits)) & 31) as u8);
+    }
+    let mut values: Vec<u8> = hrp.bytes().map(|c| c >> 5).collect();
+    values.push(0);
+    values.extend(hrp.bytes().map(|c| c & 31));
+    values.extend(&data);
+    values.extend([0; 6]);
+    let pm = polymod(&values, &BECH32) ^ 1;
+    data.extend((0..6).map(|i| ((pm >> (5 * (5 - i))) & 31) as u8));
+    let chars: String = data.iter().map(|v| CHARSET[*v as usize] as char).collect();
+    format!("{hrp}1{chars}")
+}
+
 /// 5-bit groups to bytes, without padding beyond what fills the last one
 fn from_5bit(data: &[u8]) -> Option<Vec<u8>> {
     let (mut acc, mut bits, mut out) = (0u32, 0u32, vec![]);
@@ -469,6 +494,15 @@ mod tests {
         let last = typo.len() - 1;
         typo[last] = if typo[last] == b'q' { b'p' } else { b'q' };
         assert!(!ok("arkade", &String::from_utf8(typo).unwrap()));
+    }
+
+    #[test]
+    fn bech32_encoding_roundtrips() {
+        let bytes = [7u8; 32];
+        let s = bech32_encode("note", &bytes);
+        let (hrp, data, residue) = decode(&s, BECH32).unwrap();
+        assert_eq!((hrp.as_str(), residue), ("note", 1));
+        assert_eq!(from_5bit(&data).unwrap(), bytes);
     }
 
     fn encode_bech32m(hrp: &str, bytes: &[u8]) -> String {

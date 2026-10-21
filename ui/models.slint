@@ -62,14 +62,13 @@ export struct TradeView {
     ongoing: bool,
     // over and concluded, waiting for a review or to be archived
     pending: bool,
-    // the full ids, empty when unknown
-    trade-id: string,
-    offer-id: string,
     peer: string,
     peer-name: string,
     peer-color: color,
     blocked: bool,
     summary: string,
+    // the same without the "offer" and "trade" words, for small screens
+    summary-short: string,
 }
 
  // one row of what has been agreed, with a second column when label2 isn't empty

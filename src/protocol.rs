@@ -506,7 +506,34 @@ const MAX_TRADE_ID: usize = 64;
 
 /// a new string to tell a trade apart from the others with the same peer
 pub fn new_trade_id() -> String {
-    SecretKey::generate().pubkey().to_hex()[..32].to_string()
+    const BASE58: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let mut id = String::new();
+    while id.len() < 4 {
+        // bytes from 232 up would favor the first characters
+        for b in SecretKey::generate().as_bytes() {
+            if *b < 232 && id.len() < 4 {
+                id.push(BASE58[*b as usize % 58] as char);
+            }
+        }
+    }
+    id
+}
+
+/// how a trade id is shown: "#" and its first 7 characters, since others may make longer ones
+pub fn display_trade_id(id: &str) -> String {
+    if id.is_empty() {
+        return String::new();
+    }
+    format!("#{}", id.chars().take(7).collect::<String>())
+}
+
+/// how an offer id (a hex event id) is shown: "%" and the last 5 characters of its bech32
+pub fn display_offer_id(id: &str) -> String {
+    let Ok(id) = ID::from_hex(id) else {
+        return format!("%{id}");
+    };
+    let b32 = crate::address::bech32_encode("note", id.as_bytes());
+    format!("%{}", &b32[b32.len() - 5..])
 }
 
 /// the trade string of a ping, empty if it has none or a bad one (pings of older versions)

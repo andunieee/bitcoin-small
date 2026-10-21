@@ -1621,7 +1621,7 @@ impl App {
             description: o.description.clone().into(),
             age: ago(o.created_at).into(),
             date: date(o.created_at).into(),
-            short_id: short_id(&o.id.to_hex()).into(),
+            short_id: display_offer_id(&o.id.to_hex()).into(),
         }
     }
 
@@ -2657,14 +2657,20 @@ impl App {
                 };
                 let peer = t.peer.parse().unwrap_or(peer);
                 let view = TradeView {
-                    trade_id: t.trade_id.clone().into(),
-                    offer_id: t.offer_id.clone().unwrap_or_default().into(),
                     ongoing: true,
                     summary: heading(
                         t.offer.as_ref(),
                         &t.trade_id,
                         t.offer_id.as_deref(),
                         &t.offer_summary,
+                    )
+                    .into(),
+                    summary_short: heading_with(
+                        t.offer.as_ref(),
+                        &t.trade_id,
+                        t.offer_id.as_deref(),
+                        &t.offer_summary,
+                        false,
                     )
                     .into(),
                     ..Default::default()
@@ -2693,8 +2699,6 @@ impl App {
                     })
                     .collect();
                 let view = TradeView {
-                    trade_id: t.trade_id.clone().into(),
-                    offer_id: t.offer_id.clone().unwrap_or_default().into(),
                     ongoing: false,
                     pending: t.outcome == Outcome::Concluded,
                     summary: heading(
@@ -2702,6 +2706,14 @@ impl App {
                         &t.trade_id,
                         t.offer_id.as_deref(),
                         &t.offer_summary,
+                    )
+                    .into(),
+                    summary_short: heading_with(
+                        t.offer.as_ref(),
+                        &t.trade_id,
+                        t.offer_id.as_deref(),
+                        &t.offer_summary,
+                        false,
                     )
                     .into(),
                     ..Default::default()
@@ -4164,28 +4176,36 @@ fn past_item(labels: &BTreeMap<String, String>, t: &PastTrade) -> Option<TradeIt
     })
 }
 
-/// the start of an id, enough to tell them apart and to quote
-fn short_id(id: &str) -> String {
-    id.chars().take(8).collect()
-}
-
-/// what names a trade in its card and page: "USD · trade #1a2b3c4d · offer #5e6f7a8b", leaving
-/// out what we don't have. `fallback` is the stored description, for chats that have neither.
+/// what names a trade in its card and page: "USD · offer %5e6f7 · trade #1a2b", leaving out what
+/// we don't have. `fallback` is the stored description, for chats that have neither.
 fn heading(
     terms: Option<&OfferTerms>,
     trade_id: &str,
     offer_id: Option<&str>,
     fallback: &str,
 ) -> String {
+    heading_with(terms, trade_id, offer_id, fallback, true)
+}
+
+/// like `heading`, without the "offer" and "trade" words unless `words`
+fn heading_with(
+    terms: Option<&OfferTerms>,
+    trade_id: &str,
+    offer_id: Option<&str>,
+    fallback: &str,
+    words: bool,
+) -> String {
     let mut parts = vec![];
     if let Some(terms) = terms {
         parts.push(terms.currency.clone());
     }
-    if !trade_id.is_empty() {
-        parts.push(format!("trade #{}", short_id(trade_id)));
-    }
     if let Some(id) = offer_id.filter(|id| !id.is_empty()) {
-        parts.push(format!("offer #{}", short_id(id)));
+        let id = display_offer_id(id);
+        parts.push(if words { format!("offer {id}") } else { id });
+    }
+    if !trade_id.is_empty() {
+        let id = display_trade_id(trade_id);
+        parts.push(if words { format!("trade {id}") } else { id });
     }
     if parts.is_empty() {
         fallback.trim_start_matches("maker ").into()

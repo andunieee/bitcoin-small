@@ -456,7 +456,7 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
             a.send_action(Action::PaymentDetails(details));
             return;
         }
-        // sent the way it is written down for good, without a uri around it
+        // sent the way it is written down, without a uri around it
         match a.check_bitcoin_details(&details) {
             Ok(details) => a.send_action(Action::BitcoinDetails(details)),
             Err(err) => a.status(err),
@@ -2137,7 +2137,7 @@ impl App {
 
     // ------------------------------------------------------------------------------ trades
 
-    /// our offers that haven't expired yet. expired ones are dropped from the state for good.
+    /// our offers that haven't expired yet. expired ones are dropped from the state.
     fn open_offers(&self) -> Vec<Offer> {
         let mut store = self.store.lock().unwrap();
         let before = store.state.my_offers.len();

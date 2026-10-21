@@ -28,9 +28,11 @@ mkdir "$tmp/dex"
     $(find "$tmp/classes" -name '*.class')
 
 sed -e 's|android:hasCode="false"|android:hasCode="true"|' \
+    -e 's|android:name="android.app.NativeActivity"|android:name="cash.small.bitcoin.MainActivity" android:launchMode="singleTop"|' \
     -e 's|<application |<application android:icon="@mipmap/ic_launcher" |' \
     -e 's|</application>|<service android:name="cash.small.bitcoin.ForegroundService" android:exported="false" android:foregroundServiceType="specialUse"><property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="listens for trade messages over nostr while offers or trades are open"/></service></application>|' \
     "$manifest" > "$tmp/AndroidManifest.xml"
+grep -q MainActivity "$tmp/AndroidManifest.xml"
 grep -q ForegroundService "$tmp/AndroidManifest.xml"
 grep -q ic_launcher "$tmp/AndroidManifest.xml"
 

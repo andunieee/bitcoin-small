@@ -398,6 +398,21 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
         }
     });
 
+    // a tapped notification opens its trade
+    let a = app.clone();
+    crate::notify::on_open(move |tag| {
+        if let Ok(pk) = tag.parse::<PubKey>()
+            && a.store
+                .lock()
+                .unwrap()
+                .state
+                .trades
+                .contains_key(&pk.to_hex())
+        {
+            a.show_trade(TradeRef::Ongoing(pk));
+        }
+    });
+
     let a = app.clone();
     ui.on_open_past_trade(move |id| {
         a.show_trade(TradeRef::Past(id.to_string()));

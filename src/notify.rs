@@ -22,9 +22,17 @@ pub fn set_background(on: bool) {
     imp::set_background(on);
 }
 
+/// call `f` with the `tag` of a notification when it is tapped, where the system tells us. on
+/// android that includes the one the app was started by.
+pub fn on_open(f: impl Fn(String) + Send + Sync + 'static) {
+    imp::on_open(Box::new(f));
+}
+
 #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 mod imp {
     pub fn set_background(_on: bool) {}
+
+    pub fn on_open(_f: Box<dyn Fn(String) + Send + Sync>) {}
 
     pub fn show(title: String, body: String, _tag: String) {
         // it waits for the notification service, which is no reason to hold up the ui
@@ -48,6 +56,8 @@ mod imp {
     use web_sys::{Notification, NotificationOptions, NotificationPermission};
 
     pub fn set_background(_on: bool) {}
+
+    pub fn on_open(_f: Box<dyn Fn(String) + Send + Sync>) {}
 
     /// browsers without notifications have no `Notification` at all, and touching it would throw
     fn supported() -> bool {
@@ -75,8 +85,9 @@ mod imp {
 
 #[cfg(target_os = "android")]
 mod imp {
-    use jni::objects::{JObject, JValue};
-    use jni::{JNIEnv, JavaVM};
+    use jni::objects::{JClass, JObject, JString, JValue};
+    use jni::{JNIEnv, JavaVM, NativeMethod};
+    use std::sync::OnceLock;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     /// the service in android/src, which android/package.sh adds to the apk
@@ -84,9 +95,18 @@ mod imp {
     /// whether the service is meant to be running
     static BACKGROUND: AtomicBool = AtomicBool::new(false);
 
+    /// the activity in android/src, which hears the taps on notifications
+    const ACTIVITY: &str = "cash.small.bitcoin.MainActivity";
+    /// the extra of its intent holding the trade
+    const TRADE: &str = "trade";
+    static ON_OPEN: OnceLock<Box<dyn Fn(String) + Send + Sync>> = OnceLock::new();
+
     const CHANNEL: &str = "trades";
     /// NotificationManager.IMPORTANCE_HIGH, so it pops up
     const IMPORTANCE_HIGH: i32 = 4;
+    /// Intent.FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TOP | FLAG_ACTIVITY_SINGLE_TOP, to
+    /// reuse the activity that is running
+    const INTENT_FLAGS: i32 = 0x1000_0000 | 0x0400_0000 | 0x2000_0000;
     /// PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
     const PENDING_INTENT_FLAGS: i32 = 0x0400_0000 | 0x0800_0000;
 
@@ -128,6 +148,56 @@ mod imp {
             log::warn!("{what}: {err}");
         }
         res.is_ok()
+    }
+
+    extern "system" fn native_open(mut env: JNIEnv, _class: JClass, trade: JString) {
+        if let (Some(f), Ok(trade)) = (ON_OPEN.get(), env.get_string(&trade)) {
+            f(trade.into());
+        }
+    }
+
+    /// have `f` told of the notifications tapped, through the native method of the activity
+    pub fn on_open(f: Box<dyn Fn(String) + Send + Sync>) {
+        if ON_OPEN.set(f).is_err() {
+            return;
+        }
+        std::thread::spawn(|| {
+            with_activity("failed to listen to notification taps", |env, activity| {
+                // the context isn't the activity, and native threads only find system classes
+                let loader = env
+                    .call_method(activity, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])?
+                    .l()?;
+                let name = env.new_string(ACTIVITY)?;
+                let class: JClass = env
+                    .call_method(
+                        &loader,
+                        "loadClass",
+                        "(Ljava/lang/String;)Ljava/lang/Class;",
+                        &[(&name).into()],
+                    )?
+                    .l()?
+                    .into();
+                env.register_native_methods(
+                    &class,
+                    &[NativeMethod {
+                        name: "nativeOpen".into(),
+                        sig: "(Ljava/lang/String;)V".into(),
+                        fn_ptr: native_open as *mut _,
+                    }],
+                )?;
+                // the tap that started the app, if it did
+                let pending = env
+                    .call_static_method(&class, "ready", "()Ljava/lang/String;", &[])?
+                    .l()?;
+                if !pending.is_null() {
+                    let trade: String = env.get_string(&JString::from(pending))?.into();
+                    if let Some(f) = ON_OPEN.get() {
+                        f(trade);
+                    }
+                }
+                Ok(())
+            });
+        });
     }
 
     /// start or stop the foreground service. starting it needs the app to be in the foreground,
@@ -254,52 +324,54 @@ mod imp {
             &[JValue::Bool(1)],
         )?;
 
-        // tapping it brings the app back, like its launcher icon does
-        let pm = env
-            .call_method(
-                activity,
-                "getPackageManager",
-                "()Landroid/content/pm/PackageManager;",
-                &[],
+        // tapping it opens the trade in the running app, or starts it
+        let intent = env.new_object("android/content/Intent", "()V", &[])?;
+        let class = env.new_string(ACTIVITY)?;
+        env.call_method(
+            &intent,
+            "setClassName",
+            "(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;",
+            &[activity.into(), (&class).into()],
+        )?;
+        let tag = env.new_string(tag)?;
+        let extra = env.new_string(TRADE)?;
+        env.call_method(
+            &intent,
+            "putExtra",
+            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[(&extra).into(), (&tag).into()],
+        )?;
+        env.call_method(
+            &intent,
+            "setFlags",
+            "(I)Landroid/content/Intent;",
+            &[JValue::Int(INTENT_FLAGS)],
+        )?;
+        // one pending intent for each trade, or they would all share the last one's extra
+        let code = env.call_method(&tag, "hashCode", "()I", &[])?.i()?;
+        let pending = env
+            .call_static_method(
+                "android/app/PendingIntent",
+                "getActivity",
+                "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
+                &[
+                    activity.into(),
+                    JValue::Int(code),
+                    (&intent).into(),
+                    JValue::Int(PENDING_INTENT_FLAGS),
+                ],
             )?
             .l()?;
-        let package = env
-            .call_method(activity, "getPackageName", "()Ljava/lang/String;", &[])?
-            .l()?;
-        let intent = env
-            .call_method(
-                &pm,
-                "getLaunchIntentForPackage",
-                "(Ljava/lang/String;)Landroid/content/Intent;",
-                &[(&package).into()],
-            )?
-            .l()?;
-        if !intent.is_null() {
-            let pending = env
-                .call_static_method(
-                    "android/app/PendingIntent",
-                    "getActivity",
-                    "(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
-                    &[
-                        activity.into(),
-                        JValue::Int(0),
-                        (&intent).into(),
-                        JValue::Int(PENDING_INTENT_FLAGS),
-                    ],
-                )?
-                .l()?;
-            env.call_method(
-                &builder,
-                "setContentIntent",
-                format!("(Landroid/app/PendingIntent;){SELF}"),
-                &[(&pending).into()],
-            )?;
-        }
+        env.call_method(
+            &builder,
+            "setContentIntent",
+            format!("(Landroid/app/PendingIntent;){SELF}"),
+            &[(&pending).into()],
+        )?;
 
         let notification = env
             .call_method(&builder, "build", "()Landroid/app/Notification;", &[])?
             .l()?;
-        let tag = env.new_string(tag)?;
         env.call_method(
             &manager,
             "notify",

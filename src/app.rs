@@ -18,7 +18,7 @@ use crate::protocol::*;
 use crate::relays::{MemoryRelay, Occurrence, Relays, Router};
 use crate::store::{
     DEFAULT_WRITE_RELAYS, Delivery, ENOUGH_OWN_REVIEWS, Message, MyOffer, State, Store,
-    TRUSTED_PEERS_TO_ASK, Trade,
+    TRUST_DEPTH, TRUSTED_PEERS_TO_ASK, Trade,
 };
 use crate::xfk;
 use crate::{
@@ -1389,11 +1389,87 @@ impl App {
             store.trusted_people(&self.me(), now().0, &self.xfk_people)
         };
         let mut added = false;
-        for pk in people {
-            added |= self.fetch_person_offers(pk).await;
+        for pk in &people {
+            added |= self.fetch_person_offers(*pk).await;
         }
         if added {
             self.fetch_prices().await;
+        }
+        self.fetch_trust_network(people).await;
+    }
+
+    /// walk the web of trust, `TRUST_DEPTH` steps: download the reviews written by the people we
+    /// reviewed positively, then by the ones they did, and so on, never twice from the same
+    /// person. the people we rated negatively are left out, and a negative review is kept to be
+    /// shown but its target is not followed. `done` are the people whose reviews we got already.
+    async fn fetch_trust_network(self: &Arc<Self>, done: Vec<PubKey>) {
+        let (mut seen, mut frontier) = {
+            let store = self.store.lock().unwrap();
+            let seen = store.distrusted(&self.me(), &self.xfk_people);
+            let frontier = store.trusted_by(&[self.me()], &seen);
+            (seen, frontier)
+        };
+        for _ in 0..TRUST_DEPTH {
+            if frontier.is_empty() {
+                break;
+            }
+            seen.extend(frontier.iter().copied());
+            for pk in &frontier {
+                if !done.contains(pk) {
+                    self.fetch_person_reviews(*pk).await;
+                }
+            }
+            let store = self.store.lock().unwrap();
+            frontier = store.trusted_by(&frontier, &seen);
+        }
+        // a profile open meanwhile gets what was found
+        let who = *self.current_profile.lock().unwrap();
+        if let Some(who) = who {
+            self.render_profile(who, false);
+        }
+    }
+
+    /// the nip-65 write relays of `pk`, from the relays for finding people
+    async fn write_relays_of(&self, pk: PubKey) -> Vec<String> {
+        let indexers: Vec<String> = INDEXER_RELAYS.iter().map(|r| r.to_string()).collect();
+        let lists = self
+            .fetch(
+                indexers,
+                Filter {
+                    kinds: Some(vec![KIND_RELAY_LIST]),
+                    authors: Some(vec![pk]),
+                    ..Default::default()
+                },
+            )
+            .await;
+        lists
+            .iter()
+            .filter(|e| e.pubkey == pk && e.verify_signature())
+            .max_by_key(|e| e.created_at)
+            .map(write_relays)
+            .unwrap_or_default()
+    }
+
+    /// download the trade reviews written by `pk` from their write relays into the database
+    async fn fetch_person_reviews(self: &Arc<Self>, pk: PubKey) {
+        let relays = self.write_relays_of(pk).await;
+        let reviews = self
+            .fetch(
+                relays,
+                Filter {
+                    kinds: Some(vec![KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS]),
+                    authors: Some(vec![pk]),
+                    limit: Some(500),
+                    ..Default::default()
+                },
+            )
+            .await;
+        let store = self.store.lock().unwrap();
+        for evt in reviews
+            .iter()
+            .filter(|e| e.pubkey == pk && e.verify_signature())
+        {
+            store.save_event(evt);
         }
     }
 
@@ -3447,10 +3523,18 @@ impl App {
                 } else {
                     vec![]
                 };
-                let others = if trusted.is_empty() {
+                // whoever we trust at any distance, which includes the ones we ask above
+                let mut askable = store.trust_network(&self.me(), &self.xfk_people);
+                askable.retain(|pk| *pk != who);
+                for pk in &trusted {
+                    if !askable.contains(pk) {
+                        askable.push(*pk);
+                    }
+                }
+                let others = if own.len() >= ENOUGH_OWN_REVIEWS || askable.is_empty() {
                     vec![]
                 } else {
-                    store.reviews_about(&trusted, &who)
+                    store.reviews_about(&askable, &who)
                 };
                 (own, trusted, others, labels)
             }

@@ -33,6 +33,9 @@ pub const ENOUGH_OWN_REVIEWS: usize = 20;
 pub const TRUSTED_PEERS_TO_ASK: usize = 10;
 /// a successful last trade makes someone trusted for this long
 pub const TRUST_SUCCESS_SECS: u32 = 183 * 24 * 60 * 60;
+/// how many steps away from us we follow positive reviews: the people we reviewed positively,
+/// the ones they did, and so on
+pub const TRUST_DEPTH: usize = 5;
 
 /// where the small files go. each write replaces the whole file at once.
 pub trait Files: Send + Sync {
@@ -424,6 +427,74 @@ impl Store {
         people
     }
 
+    /// the people nobody's word counts for when walking the web of trust: ourselves, `ignore`,
+    /// the ones we blocked and the ones our latest review about is a failure
+    pub fn distrusted(&self, me: &PubKey, ignore: &[PubKey]) -> HashSet<PubKey> {
+        let mut last: HashMap<PubKey, &Event> = HashMap::new();
+        let mine = self.reviews_by(me);
+        for evt in &mine {
+            if let Some(pk) = review_subject(evt)
+                && last.get(&pk).is_none_or(|l| l.created_at < evt.created_at)
+            {
+                last.insert(pk, evt);
+            }
+        }
+        let mut out: HashSet<PubKey> = last
+            .into_iter()
+            .filter(|(_, e)| e.kind == KIND_TRADE_FAILURE)
+            .map(|(pk, _)| pk)
+            .collect();
+        out.insert(*me);
+        out.extend(ignore.iter().copied());
+        out.extend(
+            self.state
+                .blocked
+                .iter()
+                .filter_map(|hex| hex.parse::<PubKey>().ok()),
+        );
+        out
+    }
+
+    /// one step further in the web of trust: whoever each of `from` reviewed positively last,
+    /// unless they are in `seen`. a negative review is no reason to follow anyone.
+    pub fn trusted_by(&self, from: &[PubKey], seen: &HashSet<PubKey>) -> Vec<PubKey> {
+        let mut out: Vec<PubKey> = vec![];
+        for author in from {
+            let mut last: HashMap<PubKey, &Event> = HashMap::new();
+            let theirs = self.reviews_by(author);
+            for evt in &theirs {
+                if let Some(pk) = review_subject(evt)
+                    && last.get(&pk).is_none_or(|l| l.created_at < evt.created_at)
+                {
+                    last.insert(pk, evt);
+                }
+            }
+            for (pk, evt) in last {
+                if evt.kind == KIND_TRADE_SUCCESS && !seen.contains(&pk) && !out.contains(&pk) {
+                    out.push(pk);
+                }
+            }
+        }
+        out
+    }
+
+    /// everyone we trust directly or through up to `TRUST_DEPTH` steps of positive reviews, going
+    /// by the reviews we have stored. never someone we distrust.
+    pub fn trust_network(&self, me: &PubKey, ignore: &[PubKey]) -> Vec<PubKey> {
+        let mut seen = self.distrusted(me, ignore);
+        let mut all = vec![];
+        let mut frontier = self.trusted_by(&[*me], &seen);
+        for _ in 0..TRUST_DEPTH {
+            if frontier.is_empty() {
+                break;
+            }
+            seen.extend(frontier.iter().copied());
+            all.extend(frontier.iter().copied());
+            frontier = self.trusted_by(&frontier, &seen);
+        }
+        all
+    }
+
     /// the people we have reviewed the most successful trades with, best first, not counting
     /// `ignore`
     pub fn top_trade_partners(&self, me: &PubKey, n: usize, ignore: &[PubKey]) -> Vec<PubKey> {
@@ -445,6 +516,11 @@ impl Store {
         ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         ranked.into_iter().take(n).map(|(pk, _)| pk).collect()
     }
+}
+
+/// who a trade review is about
+fn review_subject(evt: &Event) -> Option<PubKey> {
+    evt.tags.find("p").and_then(|t| t[1].parse::<PubKey>().ok())
 }
 
 #[cfg(test)]
@@ -512,6 +588,54 @@ mod tests {
         let mut want = vec![labeled, recent, recovered];
         got.sort_by_key(|pk| pk.to_hex());
         want.sort_by_key(|pk| pk.to_hex());
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn web_of_trust() {
+        let new_store = || {
+            Store::new(
+                Arc::new(NoFiles),
+                Arc::new(NoFiles),
+                RedbEventDatabase::from_database(memory()).unwrap(),
+            )
+        };
+        let store = new_store();
+        let review = |by: &SecretKey, about: &PubKey, kind: Kind, at: u32| {
+            store.save_event(
+                &EventTemplate {
+                    created_at: Timestamp(at),
+                    kind,
+                    tags: Tags(vec![vec!["p".into(), about.to_hex()]]),
+                    content: String::new(),
+                }
+                .finalize(by),
+            )
+        };
+        let keys: Vec<SecretKey> = (0..9).map(|_| SecretKey::generate()).collect();
+        let pk = |i: usize| keys[i].pubkey();
+        // 0 is me: 1 is good, 2 was good and then bad, 3 is bad
+        review(&keys[0], &pk(1), KIND_TRADE_SUCCESS, 10);
+        review(&keys[0], &pk(2), KIND_TRADE_SUCCESS, 10);
+        review(&keys[0], &pk(2), KIND_TRADE_FAILURE, 20);
+        review(&keys[0], &pk(3), KIND_TRADE_FAILURE, 10);
+        // 1 vouches for 4, 3 and 2, and is against 5. their word about 3 and 2 doesn't matter
+        review(&keys[1], &pk(4), KIND_TRADE_SUCCESS, 10);
+        review(&keys[1], &pk(3), KIND_TRADE_SUCCESS, 10);
+        review(&keys[1], &pk(2), KIND_TRADE_SUCCESS, 10);
+        review(&keys[1], &pk(5), KIND_TRADE_FAILURE, 10);
+        // 3 would vouch for 6, but nobody listens to 3. 4 vouches for 7, 7 for 8, and 5 for 6
+        review(&keys[3], &pk(6), KIND_TRADE_SUCCESS, 10);
+        review(&keys[4], &pk(7), KIND_TRADE_SUCCESS, 10);
+        review(&keys[7], &pk(8), KIND_TRADE_SUCCESS, 10);
+        review(&keys[5], &pk(6), KIND_TRADE_SUCCESS, 10);
+        // 8 vouches for 1 again, which changes nothing
+        review(&keys[8], &pk(1), KIND_TRADE_SUCCESS, 10);
+
+        let mut got = store.trust_network(&pk(0), &[]);
+        let mut want = vec![pk(1), pk(4), pk(7), pk(8)];
+        got.sort_by_key(|p| p.to_hex());
+        want.sort_by_key(|p| p.to_hex());
         assert_eq!(got, want);
     }
 }

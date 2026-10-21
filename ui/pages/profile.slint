@@ -1,7 +1,7 @@
 import { LineEdit, ScrollView } from "std-widgets.slint";
-import { ReviewItem, TradeItem } from "../models.slint";
+import { OfferItem, ReviewItem, TradeItem } from "../models.slint";
 import { TradeCard } from "../trade_widgets.slint";
-import { Card, Title, Muted, Identity, Button, RawTrigger, Selectable } from "../widgets.slint";
+import { Card, Title, Muted, Identity, Button, RawTrigger, Selectable, SideBadge } from "../widgets.slint";
 
 export component ProfilePage inherits ScrollView {
     in property <string> profile-npub;
@@ -15,6 +15,9 @@ export component ProfilePage inherits ScrollView {
     in property <string> others-note;
     in property <[TradeItem]> trades;
     in property <string> stats;
+    in property <[OfferItem]> offers;
+    in property <string> offers-note;
+    callback open-offer(string);
     callback open-trade(string);
     callback open-past-trade(string);
     callback review-trade(bool, string);
@@ -76,6 +79,57 @@ export component ProfilePage inherits ScrollView {
                 text: root.profile-blocked ? "Unblock" : "Block";
                 clicked => {
                     root.set-blocked(!root.profile-blocked);
+                }
+            }
+        }
+
+        if !root.profile-is-me: Text {
+            text: "Their offers";
+            font-weight: 700;
+        }
+
+        if !root.profile-is-me && root.offers-note != "": Muted {
+            text: root.offers-note;
+        }
+        for offer in root.offers: Card {
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.open-offer(offer.id);
+                }
+            }
+
+            VerticalLayout {
+                padding: 10px;
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    SideBadge {
+                        side: offer.side;
+                    }
+
+                    Text {
+                        text: offer.currency + " " + offer.premium;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: offer.price;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                Text {
+                    text: offer.amount;
+                    font-size: 13px;
+                }
+
+                Muted {
+                    text: offer.payments + " · " + offer.age;
+                    wrap: word-wrap;
                 }
             }
         }

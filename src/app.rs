@@ -505,7 +505,7 @@ fn setup_ui(app: &Arc<App>, ui: &AppWindow) {
 
     let a = app.clone();
     ui.on_open_profile(move |who| {
-        if let Ok(pk) = who.parse::<PubKey>() {
+        if let Ok(pk) = who.trim().parse::<PubKey>() {
             a.open_profile(pk);
         }
     });
@@ -1388,89 +1388,97 @@ impl App {
             let store = self.store.lock().unwrap();
             store.trusted_people(&self.me(), now().0, &self.xfk_people)
         };
-        let indexers: Vec<String> = INDEXER_RELAYS.iter().map(|r| r.to_string()).collect();
         let mut added = false;
         for pk in people {
-            let lists = self
-                .fetch(
-                    indexers.clone(),
-                    Filter {
-                        kinds: Some(vec![KIND_RELAY_LIST]),
-                        authors: Some(vec![pk]),
-                        ..Default::default()
-                    },
-                )
-                .await;
-            let Some(list) = lists
-                .iter()
-                .filter(|e| e.pubkey == pk && e.verify_signature())
-                .max_by_key(|e| e.created_at)
-            else {
-                continue;
-            };
-            let relays = write_relays(list);
-            if relays.is_empty() {
-                continue;
-            }
-
-            let since = Timestamp(now().0.saturating_sub(OFFER_TTL_SECS));
-            let (events, reviews) = tokio::join!(
-                self.fetch(
-                    relays.clone(),
-                    Filter {
-                        kinds: Some(vec![KIND_OFFER]),
-                        authors: Some(vec![pk]),
-                        since: Some(since),
-                        ..Default::default()
-                    },
-                ),
-                self.fetch(
-                    relays,
-                    Filter {
-                        kinds: Some(vec![KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS]),
-                        authors: Some(vec![pk]),
-                        limit: Some(500),
-                        ..Default::default()
-                    },
-                ),
-            );
-            // their reviews, for when we look at the people they traded with
-            {
-                let store = self.store.lock().unwrap();
-                for evt in reviews
-                    .iter()
-                    .filter(|e| e.pubkey == pk && e.verify_signature())
-                {
-                    store.save_event(evt);
-                }
-            }
-            let found: Vec<Offer> = self
-                .offers_from(&events, since, false)
-                .into_iter()
-                .filter(|o| o.maker == pk)
-                .collect();
-            if found.is_empty() {
-                continue;
-            }
-            {
-                let mut trusted = self.trusted_offers.lock().unwrap();
-                let mut offers = self.offers.lock().unwrap();
-                for o in found {
-                    if !trusted.iter().any(|x| x.id == o.id) {
-                        trusted.push(o.clone());
-                    }
-                    if !offers.iter().any(|x| x.id == o.id) {
-                        offers.push(o);
-                        added = true;
-                    }
-                }
-                offers.sort_by_key(|o| std::cmp::Reverse(o.created_at));
-            }
-            self.render_offers();
+            added |= self.fetch_person_offers(pk).await;
         }
         if added {
             self.fetch_prices().await;
         }
+    }
+
+    /// look up the write relays (nip-65) of `pk` and, there, their offers and trade reviews. the
+    /// offers go to the market, the reviews to the local database. whether the market got any.
+    async fn fetch_person_offers(self: &Arc<Self>, pk: PubKey) -> bool {
+        let indexers: Vec<String> = INDEXER_RELAYS.iter().map(|r| r.to_string()).collect();
+        let lists = self
+            .fetch(
+                indexers.clone(),
+                Filter {
+                    kinds: Some(vec![KIND_RELAY_LIST]),
+                    authors: Some(vec![pk]),
+                    ..Default::default()
+                },
+            )
+            .await;
+        let Some(list) = lists
+            .iter()
+            .filter(|e| e.pubkey == pk && e.verify_signature())
+            .max_by_key(|e| e.created_at)
+        else {
+            return false;
+        };
+        let relays = write_relays(list);
+        if relays.is_empty() {
+            return false;
+        }
+
+        let since = Timestamp(now().0.saturating_sub(OFFER_TTL_SECS));
+        let (events, reviews) = tokio::join!(
+            self.fetch(
+                relays.clone(),
+                Filter {
+                    kinds: Some(vec![KIND_OFFER]),
+                    authors: Some(vec![pk]),
+                    since: Some(since),
+                    ..Default::default()
+                },
+            ),
+            self.fetch(
+                relays,
+                Filter {
+                    kinds: Some(vec![KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS]),
+                    authors: Some(vec![pk]),
+                    limit: Some(500),
+                    ..Default::default()
+                },
+            ),
+        );
+        // their reviews, for when we look at the people they traded with
+        {
+            let store = self.store.lock().unwrap();
+            for evt in reviews
+                .iter()
+                .filter(|e| e.pubkey == pk && e.verify_signature())
+            {
+                store.save_event(evt);
+            }
+        }
+        let found: Vec<Offer> = self
+            .offers_from(&events, since, false)
+            .into_iter()
+            .filter(|o| o.maker == pk)
+            .collect();
+        if found.is_empty() {
+            return false;
+        }
+        let mut added = false;
+        {
+            let mut trusted = self.trusted_offers.lock().unwrap();
+            let mut offers = self.offers.lock().unwrap();
+            for o in found {
+                if !trusted.iter().any(|x| x.id == o.id) {
+                    trusted.push(o.clone());
+                }
+                if !offers.iter().any(|x| x.id == o.id) {
+                    offers.push(o);
+                    added = true;
+                }
+            }
+            offers.sort_by_key(|o| std::cmp::Reverse(o.created_at));
+        }
+        self.render_offers();
+        added
     }
 
     /// follow the offers of the practice market, and their deletions, as they happen: the bots
@@ -3370,6 +3378,21 @@ impl App {
             })
             .collect();
         people.sort_by_key(|p| p.label.to_lowercase());
+        // a key that is real is a profile to open, whether or not we know them
+        if let Ok(pk) = ui.get_people_filter().trim().parse::<PubKey>() {
+            let npub = pk.to_npub();
+            if !people.iter().any(|p| p.npub == npub.as_str()) {
+                people.insert(
+                    0,
+                    PersonItem {
+                        npub: npub.into(),
+                        short: short_npub(&pk).into(),
+                        label: self.name(&pk).into(),
+                        color: key_color(&pk),
+                    },
+                );
+            }
+        }
         ui.set_people(ModelRc::new(VecModel::from(people)));
     }
 
@@ -3393,6 +3416,8 @@ impl App {
             ui.set_profile_is_me(is_me);
             ui.set_profile_trades(ModelRc::default());
             ui.set_profile_stats("".into());
+            ui.set_profile_offers(ModelRc::default());
+            ui.set_profile_offers_note("looking for their offers…".into());
             ui.set_own_reviews(ModelRc::default());
             ui.set_others_reviews(ModelRc::default());
             ui.set_others_note("".into());
@@ -3462,6 +3487,23 @@ impl App {
             )
         };
 
+        let offers: Vec<OfferItem> = if is_me {
+            vec![]
+        } else {
+            self.offers
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|o| o.maker == who)
+                .map(|o| self.offer_item(o))
+                .collect()
+        };
+        let offers_note = match (ask_relays, offers.is_empty()) {
+            (true, _) => "looking for their offers…",
+            (false, true) => "no offers found on their relays in the last 3 hours.",
+            (false, false) => "",
+        };
+
         let own_items: Vec<ReviewItem> =
             own.iter().map(|e| review_item(&labels, e, is_me)).collect();
         let other_items: Vec<ReviewItem> = others
@@ -3476,11 +3518,21 @@ impl App {
             }
             ui.set_profile_trades(ModelRc::new(VecModel::from(trades)));
             ui.set_profile_stats(stats.into());
+            ui.set_profile_offers(ModelRc::new(VecModel::from(offers)));
+            ui.set_profile_offers_note(offers_note.into());
             ui.set_own_reviews(ModelRc::new(VecModel::from(own_items)));
             ui.set_others_reviews(ModelRc::new(VecModel::from(other_items)));
             ui.set_others_note(note.into());
         });
 
+        if ask_relays && !is_me {
+            // anyone can be looked up by their npub: their offers are on their own relays
+            let app = self.clone();
+            tokio::spawn(async move {
+                app.fetch_person_offers(who).await;
+                app.render_profile(who, false);
+            });
+        }
         if ask_relays && !trusted.is_empty() {
             let app = self.clone();
             tokio::spawn(async move {

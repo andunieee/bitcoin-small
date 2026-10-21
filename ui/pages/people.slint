@@ -16,7 +16,10 @@ export component PeoplePage inherits VerticalLayout {
 
     LineEdit {
         text <=> root.people-filter;
-        placeholder-text: "search labels or npubs";
+        placeholder-text: "search labels, or paste an npub";
+        accepted(t) => {
+            root.open-profile(t);
+        }
         edited(t) => {
             root.people-filter-changed(t);
         }

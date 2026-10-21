@@ -46,6 +46,9 @@ export component AppWindow inherits Window {
     // our trades with the person on the profile page, ongoing and past
     in property <[TradeItem]> profile-trades;
     in property <string> profile-stats;
+    // their offers, found on their own relays
+    in property <[OfferItem]> profile-offers;
+    in property <string> profile-offers-note;
     in property <[RelayAnswer]> offer-answers;
     callback refresh-offers();
     callback filters-changed();
@@ -460,6 +463,11 @@ export component AppWindow inherits Window {
                         others-note: root.others-note;
                         trades: root.profile-trades;
                         stats: root.profile-stats;
+                        offers: root.profile-offers;
+                        offers-note: root.profile-offers-note;
+                        open-offer(id) => {
+                            root.open-offer(id);
+                        }
                         open-trade(peer) => {
                             root.open-trade(peer);
                         }

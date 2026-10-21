@@ -40,6 +40,11 @@ export component AppWindow inherits Window {
     // the recent trades shown on the offer page
     in property <[HistoryItem]> offer-history;
     in property <[TradeItem]> offer-trades;
+    // how our trades with the maker went, and who we know traded with them
+    in property <string> offer-stats;
+    // our trades with the person on the profile page, ongoing and past
+    in property <[TradeItem]> profile-trades;
+    in property <string> profile-stats;
     in property <[RelayAnswer]> offer-answers;
     callback refresh-offers();
     callback filters-changed();
@@ -283,6 +288,7 @@ export component AppWindow inherits Window {
                         current-offer: root.current-offer;
                         history: root.offer-history;
                         trades: root.offer-trades;
+                        stats: root.offer-stats;
                         answers: root.offer-answers;
                         open-relay-site(host) => {
                             root.open-relay-site(host);
@@ -455,8 +461,13 @@ export component AppWindow inherits Window {
                         own-reviews: root.own-reviews;
                         others-reviews: root.others-reviews;
                         others-note: root.others-note;
+                        trades: root.profile-trades;
+                        stats: root.profile-stats;
                         open-trade(peer) => {
                             root.open-trade(peer);
+                        }
+                        open-past-trade(key) => {
+                            root.open-past-trade(key);
                         }
                         review-trade(success, comment) => {
                             root.review-trade(success, comment);

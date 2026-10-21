@@ -7,6 +7,7 @@ export component OfferPage inherits ScrollView {
     in property <OfferItem> current-offer;
     in property <[HistoryItem]> history;
     in property <[TradeItem]> trades;
+    in property <string> stats;
     in property <[RelayAnswer]> answers;
     callback open-relay-site(string);
     callback open-trade(string);
@@ -146,8 +147,14 @@ export component OfferPage inherits ScrollView {
                 }
             }
         }
-        if !root.current-offer.mine && root.history.length == 0: Muted {
-            text: "you have never traded with them.";
+        if !root.current-offer.mine: Muted {
+            text: root.stats;
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.open-profile(root.current-offer.maker);
+                }
+            }
         }
 
         if !root.current-offer.mine && root.history.length > 0: Card {
@@ -157,6 +164,12 @@ export component OfferPage inherits ScrollView {
                 Text {
                     text: "Recent trades";
                     font-weight: 700;
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.open-profile(root.current-offer.maker);
+                        }
+                    }
                 }
 
                 for item in root.history: row := Rectangle {

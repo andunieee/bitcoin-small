@@ -1,6 +1,7 @@
 import { LineEdit, ScrollView } from "std-widgets.slint";
-import { ReviewItem } from "../models.slint";
-import { Card, Title, Muted, Identity, Button, RawTrigger } from "../widgets.slint";
+import { ReviewItem, TradeItem } from "../models.slint";
+import { TradeCard } from "../trade_widgets.slint";
+import { Card, Title, Muted, Identity, Button, RawTrigger, Selectable } from "../widgets.slint";
 
 export component ProfilePage inherits ScrollView {
     in property <string> profile-npub;
@@ -12,7 +13,10 @@ export component ProfilePage inherits ScrollView {
     in property <[ReviewItem]> own-reviews;
     in property <[ReviewItem]> others-reviews;
     in property <string> others-note;
+    in property <[TradeItem]> trades;
+    in property <string> stats;
     callback open-trade(string);
+    callback open-past-trade(string);
     callback review-trade(bool, string);
     callback set-blocked(bool);
     callback set-label(string);
@@ -34,9 +38,9 @@ export component ProfilePage inherits ScrollView {
             font-size: 20px;
         }
 
-        LineEdit {
+        Selectable {
             text: root.profile-npub;
-            read-only: true;
+            font-size: 12px;
         }
 
         if !root.profile-is-me: HorizontalLayout {
@@ -72,6 +76,25 @@ export component ProfilePage inherits ScrollView {
                 text: root.profile-blocked ? "Unblock" : "Block";
                 clicked => {
                     root.set-blocked(!root.profile-blocked);
+                }
+            }
+        }
+
+        if !root.profile-is-me: Text {
+            text: "Your trades with them";
+            font-weight: 700;
+        }
+
+        if !root.profile-is-me: Muted {
+            text: root.stats;
+        }
+        for t in root.trades: TradeCard {
+            item: t;
+            clicked => {
+                if t.ongoing {
+                    root.open-trade(t.key);
+                } else {
+                    root.open-past-trade(t.key);
                 }
             }
         }

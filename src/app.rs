@@ -1673,12 +1673,18 @@ impl App {
             self.offer_history(offer.maker)
         };
         let trades = self.offer_trades(&id);
+        let stats = if offer.maker == self.me() {
+            String::new()
+        } else {
+            self.peer_stats(offer.maker)
+        };
         let answers = relay_answers(&self.offer_deliveries(&id));
         *self.current_offer.lock().unwrap() = Some(id);
         ui.set_offer_answers(ModelRc::new(VecModel::from(answers)));
         ui.set_current_offer(self.offer_item(offer));
         ui.set_offer_history(ModelRc::new(VecModel::from(history)));
         ui.set_offer_trades(ModelRc::new(VecModel::from(trades)));
+        ui.set_offer_stats(stats.into());
         ui.set_back_page(back_page);
         ui.set_page(1);
     }
@@ -1707,6 +1713,110 @@ impl App {
                 .filter_map(|t| past_item(&s.labels, t)),
         );
         items
+    }
+
+    /// all our trades with a person: the ongoing ones first, then every past one, concluded or
+    /// archived, reviewed or not
+    fn peer_trades(&self, peer: PubKey) -> Vec<TradeItem> {
+        let store = self.store.lock().unwrap();
+        let s = &store.state;
+        let hex = peer.to_hex();
+        let mut ongoing: Vec<_> = s.trades.iter().filter(|(_, t)| t.peer == hex).collect();
+        ongoing.sort_by_key(|(_, t)| std::cmp::Reverse(t.started_at));
+        let mut items: Vec<TradeItem> = ongoing
+            .into_iter()
+            .filter_map(|(key, t)| ongoing_item(s, key, t))
+            .collect();
+        items.extend(
+            store
+                .history
+                .list(usize::MAX)
+                .iter()
+                .filter(|t| t.peer == hex)
+                .filter_map(|t| past_item(&s.labels, t)),
+        );
+        items
+    }
+
+    /// what we know about a person from our own trades with them and from the reviews that the
+    /// people we labeled or trust have written about them. two lines.
+    fn peer_stats(&self, who: PubKey) -> String {
+        let store = self.store.lock().unwrap();
+        let hex = who.to_hex();
+        let ongoing = store
+            .state
+            .trades
+            .values()
+            .filter(|t| t.peer == hex)
+            .count();
+        let past: Vec<_> = store
+            .history
+            .list(usize::MAX)
+            .into_iter()
+            .filter(|t| t.peer == hex)
+            .collect();
+        let count = |o: Outcome| past.iter().filter(|t| t.outcome == o).count();
+        let (positive, negative) = (count(Outcome::Success), count(Outcome::Failure));
+        let total = ongoing + past.len();
+        let trades = if total == 0 {
+            "you have never traded with them.".to_string()
+        } else {
+            let mut parts = vec![format!(
+                "{total} {} with them",
+                if total == 1 { "trade" } else { "trades" }
+            )];
+            for (n, what) in [
+                (positive, "positive"),
+                (negative, "negative"),
+                (ongoing, "ongoing"),
+                (total - positive - negative - ongoing, "not reviewed"),
+            ] {
+                if n > 0 {
+                    parts.push(format!("{n} {what}"));
+                }
+            }
+            parts.join(" · ")
+        };
+
+        // the last review each of them wrote
+        let known: Vec<PubKey> = store
+            .trusted_people(&self.me(), now().0, &self.xfk_people)
+            .into_iter()
+            .filter(|pk| *pk != who)
+            .collect();
+        let mut latest: HashMap<PubKey, Event> = HashMap::new();
+        for evt in store.reviews_about(&known, &who) {
+            if latest
+                .get(&evt.pubkey)
+                .is_none_or(|l| l.created_at < evt.created_at)
+            {
+                latest.insert(evt.pubkey, evt);
+            }
+        }
+        let known_line = if latest.is_empty() {
+            "none of the people you labeled or trust are known to have traded with them.".into()
+        } else {
+            let mut names: Vec<String> = latest
+                .values()
+                .map(|e| {
+                    format!(
+                        "{} {}",
+                        display_name(&store.state.labels, &e.pubkey),
+                        if e.kind == KIND_TRADE_SUCCESS {
+                            "✓"
+                        } else {
+                            "✗"
+                        }
+                    )
+                })
+                .collect();
+            names.sort();
+            format!(
+                "traded with them, among people you know: {}",
+                names.join(", ")
+            )
+        };
+        format!("{trades}\n{known_line}")
     }
 
     fn offer_history(&self, maker: PubKey) -> Vec<HistoryItem> {
@@ -3077,6 +3187,10 @@ impl App {
         // the page of the offer being looked at lists trades too
         let current = self.current_offer.lock().unwrap().clone();
         let offer_trades = current.map(|id| self.offer_trades(&id));
+        let profile = *self.current_profile.lock().unwrap();
+        let profile_trades = profile
+            .filter(|p| *p != self.me())
+            .map(|p| self.peer_trades(p));
         // the tip stays until a real trade went all the way, practice doesn't count
         let newcomer = !concluded;
         let _ = self.ui.upgrade_in_event_loop(move |ui| {
@@ -3087,6 +3201,9 @@ impl App {
             ui.set_past_trades(ModelRc::new(VecModel::from(past)));
             if let Some(trades) = offer_trades {
                 ui.set_offer_trades(ModelRc::new(VecModel::from(trades)));
+            }
+            if let Some(trades) = profile_trades {
+                ui.set_profile_trades(ModelRc::new(VecModel::from(trades)));
             }
         });
         self.sync_background();
@@ -3207,6 +3324,8 @@ impl App {
             ui.set_profile_blocked(blocked);
             ui.set_profile_label(label.into());
             ui.set_profile_is_me(is_me);
+            ui.set_profile_trades(ModelRc::default());
+            ui.set_profile_stats("".into());
             ui.set_own_reviews(ModelRc::default());
             ui.set_others_reviews(ModelRc::default());
             ui.set_others_note("".into());
@@ -3245,6 +3364,13 @@ impl App {
             }
         };
 
+        let trades = if is_me { vec![] } else { self.peer_trades(who) };
+        let stats = if is_me {
+            String::new()
+        } else {
+            self.peer_stats(who)
+        };
+
         let note = if is_me {
             String::new()
         } else if own.len() >= ENOUGH_OWN_REVIEWS {
@@ -3281,6 +3407,8 @@ impl App {
             if *app.current_profile.lock().unwrap() != Some(who) {
                 return;
             }
+            ui.set_profile_trades(ModelRc::new(VecModel::from(trades)));
+            ui.set_profile_stats(stats.into());
             ui.set_own_reviews(ModelRc::new(VecModel::from(own_items)));
             ui.set_others_reviews(ModelRc::new(VecModel::from(other_items)));
             ui.set_others_note(note.into());

@@ -18,7 +18,7 @@ use crate::protocol::*;
 use crate::relays::{MemoryRelay, Occurrence, Relays, Router};
 use crate::store::{
     DEFAULT_WRITE_RELAYS, Delivery, ENOUGH_OWN_REVIEWS, Message, MyOffer, State, Store,
-    TRUST_DEPTH, TRUSTED_PEERS_TO_ASK, Trade,
+    TRUSTED_PEERS_TO_ASK, Trade,
 };
 use crate::xfk;
 use crate::{
@@ -27,6 +27,8 @@ use crate::{
 };
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(12);
+/// the wait between downloading the reviews of one person and the next, to go easy on the relays
+const TRUST_FETCH_PAUSE: Duration = Duration::from_secs(2);
 const RECONNECT_DELAY: Duration = Duration::from_secs(10);
 const PRICE_REFRESH: Duration = Duration::from_secs(60);
 /// how far before a trade started its messages are still taken as part of it, for clock skew
@@ -754,6 +756,9 @@ impl App {
             }
             // they belong to the old key, the new one may have its own relay list
             store.state.write_relays = None;
+            // how we got to know people started from the old key
+            store.profiles.forget_relationships();
+            store.persist_profiles();
             store.persist();
         }
         *self.identity.write().unwrap() = (sk.clone(), sk.pubkey());
@@ -1389,40 +1394,46 @@ impl App {
             store.trusted_people(&self.me(), now().0, &self.xfk_people)
         };
         let mut added = false;
-        for pk in &people {
-            added |= self.fetch_person_offers(*pk).await;
+        for pk in people {
+            added |= self.fetch_person_offers(pk).await;
         }
         if added {
             self.fetch_prices().await;
         }
-        self.fetch_trust_network(people).await;
+        self.fetch_trust_network().await;
     }
 
-    /// walk the web of trust, `TRUST_DEPTH` steps: download the reviews written by the people we
-    /// reviewed positively, then by the ones they did, and so on, never twice from the same
-    /// person. the people we rated negatively are left out, and a negative review is kept to be
-    /// shown but its target is not followed. `done` are the people whose reviews we got already.
-    async fn fetch_trust_network(self: &Arc<Self>, done: Vec<PubKey>) {
-        let (mut seen, mut frontier) = {
-            let store = self.store.lock().unwrap();
-            let seen = store.distrusted(&self.me(), &self.xfk_people);
-            let frontier = store.trusted_by(&[self.me()], &seen);
-            (seen, frontier)
-        };
-        for _ in 0..TRUST_DEPTH {
-            if frontier.is_empty() {
+    /// download the reviews written by the people in our network, one by one and slowly, the ones
+    /// we never got first and then the closest to us. what they reviewed positively is added to
+    /// the network by `record_reviews`, so we keep going until everyone, up to `TRUST_DEPTH` steps
+    /// away, was fetched in the last day.
+    async fn fetch_trust_network(self: &Arc<Self>) {
+        {
+            let mut store = self.store.lock().unwrap();
+            store.record_direct_trust(&self.me(), now().0, &self.xfk_people);
+        }
+        let mut fetched = 0;
+        loop {
+            let next = {
+                let store = self.store.lock().unwrap();
+                let distrusted = store.distrusted(&self.me(), &self.xfk_people);
+                store.profiles.next_to_fetch(now().0, &distrusted)
+            };
+            let Some(pk) = next else { break };
+            if !self.fetch_person_reviews(pk).await {
                 break;
             }
-            seen.extend(frontier.iter().copied());
-            for pk in &frontier {
-                if !done.contains(pk) {
-                    self.fetch_person_reviews(*pk).await;
-                }
+            fetched += 1;
+            if fetched % 10 == 0 {
+                self.render_open_profile();
             }
-            let store = self.store.lock().unwrap();
-            frontier = store.trusted_by(&frontier, &seen);
+            tokio::time::sleep(TRUST_FETCH_PAUSE).await;
         }
-        // a profile open meanwhile gets what was found
+        self.render_open_profile();
+    }
+
+    /// a profile open meanwhile gets what was found
+    fn render_open_profile(self: &Arc<Self>) {
         let who = *self.current_profile.lock().unwrap();
         if let Some(who) = who {
             self.render_profile(who, false);
@@ -1450,8 +1461,12 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// download the trade reviews written by `pk` from their write relays into the database
-    async fn fetch_person_reviews(self: &Arc<Self>, pk: PubKey) {
+    /// download the trade reviews written by `pk` from their write relays into the database, and
+    /// take them into the profiles. false if we can't, as we are offline.
+    async fn fetch_person_reviews(self: &Arc<Self>, pk: PubKey) -> bool {
+        if self.offline {
+            return false;
+        }
         let relays = self.write_relays_of(pk).await;
         let reviews = self
             .fetch(
@@ -1464,13 +1479,20 @@ impl App {
                 },
             )
             .await;
-        let store = self.store.lock().unwrap();
+        self.take_reviews(pk, &reviews);
+        true
+    }
+
+    /// keep the reviews `pk` wrote, and what they say about the people they reviewed
+    fn take_reviews(&self, pk: PubKey, reviews: &[Event]) {
+        let mut store = self.store.lock().unwrap();
         for evt in reviews
             .iter()
             .filter(|e| e.pubkey == pk && e.verify_signature())
         {
             store.save_event(evt);
         }
+        store.record_reviews(&self.me(), &pk, now().0, &self.xfk_people);
     }
 
     /// look up the write relays (nip-65) of `pk` and, there, their offers and trade reviews. the
@@ -1521,15 +1543,7 @@ impl App {
             ),
         );
         // their reviews, for when we look at the people they traded with
-        {
-            let store = self.store.lock().unwrap();
-            for evt in reviews
-                .iter()
-                .filter(|e| e.pubkey == pk && e.verify_signature())
-            {
-                store.save_event(evt);
-            }
-        }
+        self.take_reviews(pk, &reviews);
         let found: Vec<Offer> = self
             .offers_from(&events, since, false)
             .into_iter()
@@ -1840,7 +1854,7 @@ impl App {
     }
 
     /// what we know about a person from our own trades with them and from the reviews that the
-    /// people we labeled or trust have written about them. two lines.
+    /// people we labeled or trust have written about them, and how we got to know them. three lines.
     fn peer_stats(&self, who: PubKey) -> String {
         let store = self.store.lock().unwrap();
         let hex = who.to_hex();
@@ -1917,7 +1931,33 @@ impl App {
                 names.join(", ")
             )
         };
-        format!("{trades}\n{known_line}")
+        let distrusted = store.distrusted(&self.me(), &self.xfk_people);
+        let mut ways: Vec<String> = store
+            .profiles
+            .paths(&hex, &distrusted)
+            .map(|path| {
+                if path.is_empty() {
+                    "directly".to_string()
+                } else {
+                    let names: Vec<String> = path
+                        .iter()
+                        .map(|h| {
+                            h.parse::<PubKey>()
+                                .map(|pk| display_name(&store.state.labels, &pk))
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                    format!("via {}", names.join(" → "))
+                }
+            })
+            .collect();
+        if ways.is_empty() {
+            ways.push("not in your web of trust".into());
+        }
+        format!(
+            "{trades}\n{known_line}\nyou know them: {}",
+            ways.join(" · ")
+        )
     }
 
     fn offer_history(&self, maker: PubKey) -> Vec<HistoryItem> {
@@ -3402,12 +3442,7 @@ impl App {
         }
         {
             let mut store = self.store.lock().unwrap();
-            if label.is_empty() {
-                store.state.labels.remove(&peer.to_hex());
-            } else {
-                store.state.labels.insert(peer.to_hex(), label.to_string());
-            }
-            store.persist();
+            store.set_label(&peer.to_hex(), label);
         }
         self.render_offers();
         self.render_trades();

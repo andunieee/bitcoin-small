@@ -13,6 +13,7 @@ use ritualistic::{Event, Filter, PubKey, RedbEventDatabase, SecretKey, TagQuery}
 use crate::deal::OfferTerms;
 use crate::form::OfferTemplate;
 use crate::history::History;
+use crate::profiles::Profiles;
 use crate::protocol::{KIND_TRADE_FAILURE, KIND_TRADE_SUCCESS};
 
 #[cfg(not(debug_assertions))]
@@ -210,8 +211,10 @@ pub struct State {
     pub my_offers: Vec<MyOffer>,
     #[serde(default)]
     pub blocked: HashSet<String>,
-    /// peer pubkey hex -> a name for them that only we see, never published
-    #[serde(default)]
+    /// peer pubkey hex -> a name for them that only we see, never published. they are saved in
+    /// the profiles (profiles.json), this is a copy for looking them up. state.json used to hold
+    /// them, which is only read to carry them over.
+    #[serde(default, skip_serializing)]
     pub labels: BTreeMap<String, String>,
     /// what we filled in for our last offers, most recent first, to fill the next one
     #[serde(default)]
@@ -235,6 +238,8 @@ pub struct Store {
     pub db: RedbEventDatabase,
     /// the trades that are over, see `history.rs`
     pub history: History,
+    /// the people we know, see `profiles.rs`
+    pub profiles: Profiles,
 }
 
 impl Store {
@@ -288,14 +293,40 @@ impl Store {
         if let Some(saved) = saved {
             state.app_relays = saved.app_relays;
         }
+        let mut profiles = files
+            .read("profiles.json")
+            .and_then(|s| match Profiles::from_json(&s) {
+                Ok(profiles) => Some(profiles),
+                Err(err) => {
+                    log::error!("unreadable profiles.json, kept as profiles.json.bad: {err}");
+                    if let Err(err) = files.write("profiles.json.bad", &s) {
+                        log::error!("failed to keep profiles.json: {err}");
+                    }
+                    None
+                }
+            })
+            .unwrap_or_default();
+        // the labels that state.json used to hold
+        let mut moved = false;
+        for (hex, label) in &state.labels {
+            if profiles.get(hex).is_none_or(|p| p.label.is_empty()) {
+                profiles.set_label(hex, label);
+                moved = true;
+            }
+        }
+        state.labels = profiles.labels();
         let store = Self {
             files,
             config,
             settings_json: Mutex::new(String::new()),
             state,
             history: History::new(db.clone(), PubKey([0; 32])),
+            profiles,
             db,
         };
+        if moved {
+            store.persist_profiles();
+        }
         if carried_over {
             store.persist_settings();
         } else {
@@ -455,44 +486,92 @@ impl Store {
         out
     }
 
-    /// one step further in the web of trust: whoever each of `from` reviewed positively last,
-    /// unless they are in `seen`. a negative review is no reason to follow anyone.
-    pub fn trusted_by(&self, from: &[PubKey], seen: &HashSet<PubKey>) -> Vec<PubKey> {
-        let mut out: Vec<PubKey> = vec![];
-        for author in from {
-            let mut last: HashMap<PubKey, &Event> = HashMap::new();
-            let theirs = self.reviews_by(author);
-            for evt in &theirs {
-                if let Some(pk) = review_subject(evt)
-                    && last.get(&pk).is_none_or(|l| l.created_at < evt.created_at)
-                {
-                    last.insert(pk, evt);
-                }
-            }
-            for (pk, evt) in last {
-                if evt.kind == KIND_TRADE_SUCCESS && !seen.contains(&pk) && !out.contains(&pk) {
-                    out.push(pk);
-                }
+    /// take in the trade reviews of `reviewer` that we have stored, after downloading them. everyone
+    /// they reviewed gets a profile, and the ones whose latest review is positive get a new way of
+    /// getting to know them, through the shortest one we have of `reviewer`. a negative review
+    /// takes back the way that went through it. their reviews are marked as downloaded now, unless
+    /// they are ours, which are always at hand.
+    pub fn record_reviews(&mut self, me: &PubKey, reviewer: &PubKey, now: u32, ignore: &[PubKey]) {
+        let distrusted = self.distrusted(me, ignore);
+        let reviewer_hex = reviewer.to_hex();
+        let path = if reviewer == me {
+            Some(vec![])
+        } else {
+            self.profiles
+                .paths(&reviewer_hex, &distrusted)
+                .next()
+                .map(|base| [base.as_slice(), std::slice::from_ref(&reviewer_hex)].concat())
+        };
+        let mut last: HashMap<PubKey, Event> = HashMap::new();
+        for evt in self.reviews_by(reviewer) {
+            if let Some(pk) = review_subject(&evt)
+                && last.get(&pk).is_none_or(|l| l.created_at < evt.created_at)
+            {
+                last.insert(pk, evt);
             }
         }
-        out
+        for (target, evt) in last {
+            if target == *me || target == *reviewer {
+                continue;
+            }
+            let hex = target.to_hex();
+            self.profiles.entry(&hex);
+            let Some(path) = &path else { continue };
+            if evt.kind != KIND_TRADE_SUCCESS {
+                self.profiles.remove_relationship(&hex, path);
+            } else if path.len() < TRUST_DEPTH
+                && !distrusted.contains(&target)
+                && !path.contains(&hex)
+            {
+                self.profiles.add_relationship(&hex, path.clone());
+            }
+        }
+        if reviewer != me {
+            self.profiles.mark_fetched(&reviewer_hex, now);
+        }
+        self.persist_profiles();
     }
 
-    /// everyone we trust directly or through up to `TRUST_DEPTH` steps of positive reviews, going
-    /// by the reviews we have stored. never someone we distrust.
-    pub fn trust_network(&self, me: &PubKey, ignore: &[PubKey]) -> Vec<PubKey> {
-        let mut seen = self.distrusted(me, ignore);
-        let mut all = vec![];
-        let mut frontier = self.trusted_by(&[*me], &seen);
-        for _ in 0..TRUST_DEPTH {
-            if frontier.is_empty() {
-                break;
-            }
-            seen.extend(frontier.iter().copied());
-            all.extend(frontier.iter().copied());
-            frontier = self.trusted_by(&frontier, &seen);
+    /// the people we trust directly: whoever our latest review is positive about, and the ones we
+    /// labeled and never reviewed negatively
+    pub fn record_direct_trust(&mut self, me: &PubKey, now: u32, ignore: &[PubKey]) {
+        self.record_reviews(me, me, now, ignore);
+        let distrusted = self.distrusted(me, ignore);
+        let labeled: Vec<String> = self
+            .profiles
+            .labels()
+            .into_keys()
+            .filter(|hex| {
+                hex.parse::<PubKey>()
+                    .is_ok_and(|pk| !distrusted.contains(&pk))
+            })
+            .collect();
+        for hex in labeled {
+            self.profiles.add_relationship(&hex, vec![]);
         }
-        all
+        self.persist_profiles();
+    }
+
+    /// everyone we trust, directly or through others, by the profiles we have
+    pub fn trust_network(&self, me: &PubKey, ignore: &[PubKey]) -> Vec<PubKey> {
+        self.profiles.network(&self.distrusted(me, ignore))
+    }
+
+    /// change the label of someone, or take it away with an empty one
+    pub fn set_label(&mut self, hex: &str, label: &str) {
+        self.profiles.set_label(hex, label);
+        if label.is_empty() {
+            self.state.labels.remove(hex);
+        } else {
+            self.state.labels.insert(hex.to_string(), label.to_string());
+        }
+        self.persist_profiles();
+    }
+
+    pub fn persist_profiles(&self) {
+        if let Err(err) = self.files.write("profiles.json", &self.profiles.to_json()) {
+            log::error!("failed to save the profiles: {err}");
+        }
     }
 
     /// the people we have reviewed the most successful trades with, best first, not counting
@@ -593,49 +672,79 @@ mod tests {
 
     #[test]
     fn web_of_trust() {
-        let new_store = || {
-            Store::new(
-                Arc::new(NoFiles),
-                Arc::new(NoFiles),
-                RedbEventDatabase::from_database(memory()).unwrap(),
-            )
-        };
-        let store = new_store();
-        let review = |by: &SecretKey, about: &PubKey, kind: Kind, at: u32| {
+        let mut store = Store::new(
+            Arc::new(NoFiles),
+            Arc::new(NoFiles),
+            RedbEventDatabase::from_database(memory()).unwrap(),
+        );
+        let keys: Vec<SecretKey> = (0..9).map(|_| SecretKey::generate()).collect();
+        let pk = |i: usize| keys[i].pubkey();
+        let hex = |i: usize| pk(i).to_hex();
+        let review = |store: &Store, by: usize, about: usize, kind: Kind, at: u32| {
             store.save_event(
                 &EventTemplate {
                     created_at: Timestamp(at),
                     kind,
-                    tags: Tags(vec![vec!["p".into(), about.to_hex()]]),
+                    tags: Tags(vec![vec!["p".into(), hex(about)]]),
                     content: String::new(),
                 }
-                .finalize(by),
+                .finalize(&keys[by]),
             )
         };
-        let keys: Vec<SecretKey> = (0..9).map(|_| SecretKey::generate()).collect();
-        let pk = |i: usize| keys[i].pubkey();
+        let me = pk(0);
         // 0 is me: 1 is good, 2 was good and then bad, 3 is bad
-        review(&keys[0], &pk(1), KIND_TRADE_SUCCESS, 10);
-        review(&keys[0], &pk(2), KIND_TRADE_SUCCESS, 10);
-        review(&keys[0], &pk(2), KIND_TRADE_FAILURE, 20);
-        review(&keys[0], &pk(3), KIND_TRADE_FAILURE, 10);
-        // 1 vouches for 4, 3 and 2, and is against 5. their word about 3 and 2 doesn't matter
-        review(&keys[1], &pk(4), KIND_TRADE_SUCCESS, 10);
-        review(&keys[1], &pk(3), KIND_TRADE_SUCCESS, 10);
-        review(&keys[1], &pk(2), KIND_TRADE_SUCCESS, 10);
-        review(&keys[1], &pk(5), KIND_TRADE_FAILURE, 10);
-        // 3 would vouch for 6, but nobody listens to 3. 4 vouches for 7, 7 for 8, and 5 for 6
-        review(&keys[3], &pk(6), KIND_TRADE_SUCCESS, 10);
-        review(&keys[4], &pk(7), KIND_TRADE_SUCCESS, 10);
-        review(&keys[7], &pk(8), KIND_TRADE_SUCCESS, 10);
-        review(&keys[5], &pk(6), KIND_TRADE_SUCCESS, 10);
-        // 8 vouches for 1 again, which changes nothing
-        review(&keys[8], &pk(1), KIND_TRADE_SUCCESS, 10);
+        review(&store, 0, 1, KIND_TRADE_SUCCESS, 10);
+        review(&store, 0, 2, KIND_TRADE_SUCCESS, 10);
+        review(&store, 0, 2, KIND_TRADE_FAILURE, 20);
+        review(&store, 0, 3, KIND_TRADE_FAILURE, 10);
+        store.record_direct_trust(&me, 100, &[]);
+        assert_eq!(
+            store.profiles.get(&hex(1)).unwrap().relationship,
+            vec![Vec::<String>::new()]
+        );
+        assert!(store.profiles.get(&hex(2)).unwrap().relationship.is_empty());
 
-        let mut got = store.trust_network(&pk(0), &[]);
+        // 1 vouches for 4, 3 and 2, and is against 5. their word about 3 and 2 doesn't matter
+        review(&store, 1, 4, KIND_TRADE_SUCCESS, 10);
+        review(&store, 1, 3, KIND_TRADE_SUCCESS, 10);
+        review(&store, 1, 2, KIND_TRADE_SUCCESS, 10);
+        review(&store, 1, 5, KIND_TRADE_FAILURE, 10);
+        store.record_reviews(&me, &pk(1), 100, &[]);
+        assert_eq!(store.profiles.get(&hex(1)).unwrap().last_fetched, 100);
+        assert_eq!(
+            store.profiles.get(&hex(4)).unwrap().relationship,
+            vec![vec![hex(1)]]
+        );
+        // 5 is known, but not followed
+        assert!(store.profiles.get(&hex(5)).unwrap().relationship.is_empty());
+
+        // 3 would vouch for 6, but nobody listens to 3. 4 vouches for 7, 7 for 8 and 5 for 6
+        review(&store, 3, 6, KIND_TRADE_SUCCESS, 10);
+        review(&store, 4, 7, KIND_TRADE_SUCCESS, 10);
+        review(&store, 7, 8, KIND_TRADE_SUCCESS, 10);
+        review(&store, 5, 6, KIND_TRADE_SUCCESS, 10);
+        // 8 vouches for 1 again, which is a way to know them that goes through them
+        review(&store, 8, 1, KIND_TRADE_SUCCESS, 10);
+        for i in [3, 4, 5, 7, 8] {
+            store.record_reviews(&me, &pk(i), 100, &[]);
+        }
+        assert_eq!(
+            store.profiles.get(&hex(8)).unwrap().relationship,
+            vec![vec![hex(1), hex(4), hex(7)]]
+        );
+        assert_eq!(store.profiles.get(&hex(1)).unwrap().relationship.len(), 1);
+        // 6 is known from people nobody trusts
+        assert!(store.profiles.get(&hex(6)).unwrap().relationship.is_empty());
+
+        let mut got = store.trust_network(&me, &[]);
         let mut want = vec![pk(1), pk(4), pk(7), pk(8)];
         got.sort_by_key(|p| p.to_hex());
         want.sort_by_key(|p| p.to_hex());
         assert_eq!(got, want);
+
+        // 1 takes back a vouch: the way through them goes away
+        review(&store, 1, 4, KIND_TRADE_FAILURE, 20);
+        store.record_reviews(&me, &pk(1), 200, &[]);
+        assert!(store.profiles.get(&hex(4)).unwrap().relationship.is_empty());
     }
 }

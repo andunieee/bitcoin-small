@@ -5,6 +5,7 @@ pub mod form;
 pub mod history;
 mod notify;
 pub mod prices;
+pub mod profiles;
 pub mod protocol;
 pub mod relays;
 pub mod store;
